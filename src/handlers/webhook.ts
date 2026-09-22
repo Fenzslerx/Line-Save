@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import crypto from 'crypto';
 import { config } from '../config/env';
-import { downloadMessageImage, replyLineMessage } from '../services/line';
+import { downloadMessageImage, replyLineMessage, showLoadingAnimation } from '../services/line';
 import { extractSlipInfo } from '../services/vision';
 import { getSupabaseClient } from '../db/client';
 import {
@@ -123,6 +123,11 @@ export async function processWebhookEvent(event: any): Promise<void> {
 async function handleImageMessage(event: any, userId: string, groupId: string | null) {
   const messageId = event.message.id;
   const replyToken = event.replyToken;
+
+  const targetChatId = groupId || userId;
+  if (targetChatId) {
+    await showLoadingAnimation(targetChatId, 20); // max 20 seconds loading animation
+  }
 
   console.log(`[Slip Detection] Downloading image for message: ${messageId}`);
   const imageBuffer = await downloadMessageImage(messageId);

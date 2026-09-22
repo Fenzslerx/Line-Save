@@ -70,51 +70,57 @@ export async function extractSlipInfo(
     confidence: 'low'
   };
 
-  try {
-    const client = clientOverride || getGeminiClient();
-    const base64Data = imageBuffer.toString('base64');
-    const model = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+  const client = clientOverride || getGeminiClient();
+  const base64Data = imageBuffer.toString('base64');
+  const model = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
 
-    const response = await client.models.generateContent({
-      model: model,
-      contents: [
-        {
-          role: 'user',
-          parts: [
-            {
-              inlineData: {
-                mimeType: mimeType,
-                data: base64Data
-              }
-            },
-            {
-              text: 'Analyze this image and output the transaction details as JSON.'
-            }
-          ]
+  const MAX_RETRIES = 3;
+  let lastError: any;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await client.models.generateContent({
+        model: model,
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { inlineData: { mimeType: mimeType, data: base64Data } },
+              { text: 'Analyze this image and output the transaction details as JSON.' }
+            ]
+          }
+        ],
+        config: {
+          systemInstruction: SYSTEM_PROMPT,
+          responseMimeType: 'application/json',
+          maxOutputTokens: 256 // Optimize for faster generation
         }
-      ],
-      config: {
-        systemInstruction: SYSTEM_PROMPT,
-        responseMimeType: 'application/json',
+      });
+
+      const textContent = response.text || '';
+      if (!textContent) return fallbackResult;
+
+      const parsed = JSON.parse(textContent);
+      return {
+        is_slip: Boolean(parsed.is_slip),
+        amount: typeof parsed.amount === 'number' ? parsed.amount : (parsed.amount ? parseFloat(parsed.amount) : null),
+        date: typeof parsed.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date) ? parsed.date : null,
+        merchant: parsed.merchant ? String(parsed.merchant).trim() : null,
+        confidence: ['high', 'medium', 'low'].includes(parsed.confidence) ? parsed.confidence : 'low'
+      };
+    } catch (error: any) {
+      lastError = error;
+      // Retry only on 5xx or specific Google API rate limit errors
+      const isRetryable = error?.status === 503 || error?.status === 500 || error?.status === 429;
+      if (isRetryable && attempt < MAX_RETRIES) {
+        console.warn(`[Vision Service] Attempt ${attempt} failed with ${error.status}. Retrying in 1.5s...`);
+        await new Promise(resolve => setTimeout(resolve, 1500));
+      } else {
+        break; // Stop retrying
       }
-    });
-
-    const textContent = response.text || '';
-    if (!textContent) {
-      return fallbackResult;
     }
-
-    const parsed = JSON.parse(textContent);
-
-    return {
-      is_slip: Boolean(parsed.is_slip),
-      amount: typeof parsed.amount === 'number' ? parsed.amount : (parsed.amount ? parseFloat(parsed.amount) : null),
-      date: typeof parsed.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date) ? parsed.date : null,
-      merchant: parsed.merchant ? String(parsed.merchant).trim() : null,
-      confidence: ['high', 'medium', 'low'].includes(parsed.confidence) ? parsed.confidence : 'low'
-    };
-  } catch (error) {
-    console.error('[Vision Service] Error analyzing slip image:', error);
-    return fallbackResult;
   }
+
+  console.error('[Vision Service] Error analyzing slip image after retries:', lastError);
+  return fallbackResult;
 }

@@ -47,3 +47,18 @@ export async function replyLineMessage(replyToken: string, messages: any[]): Pro
     messages
   });
 }
+
+/**
+ * Show loading animation (typing indicator)
+ */
+export async function showLoadingAnimation(chatId: string, loadingSeconds: number = 20): Promise<void> {
+  try {
+    const client = getLineClient();
+    await client.showLoadingAnimation({
+      chatId,
+      loadingSeconds
+    });
+  } catch (err) {
+    console.warn('[LINE API] Failed to show loading animation:', err);
+  }
+}

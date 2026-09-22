@@ -6,7 +6,8 @@ import { config } from '../src/config/env';
 // Mock external services so tests don't make real network calls
 jest.mock('../src/services/line', () => ({
   downloadMessageImage: jest.fn().mockResolvedValue(Buffer.from('mock_image')),
-  replyLineMessage: jest.fn().mockResolvedValue(undefined)
+  replyLineMessage: jest.fn().mockResolvedValue(undefined),
+  showLoadingAnimation: jest.fn().mockResolvedValue(undefined)
 }));
 
 jest.mock('../src/services/vision', () => ({

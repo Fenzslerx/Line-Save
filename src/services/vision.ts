@@ -93,12 +93,15 @@ export async function extractSlipInfo(
         config: {
           systemInstruction: SYSTEM_PROMPT,
           responseMimeType: 'application/json',
-          maxOutputTokens: 256 // Optimize for faster generation
+          maxOutputTokens: 1024
         }
       });
 
-      const textContent = response.text || '';
+      let textContent = response.text || '';
       if (!textContent) return fallbackResult;
+
+      // Strip markdown code fences in case the model ignores responseMimeType
+      textContent = textContent.trim().replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '').trim();
 
       const parsed = JSON.parse(textContent);
       return {
@@ -110,10 +113,10 @@ export async function extractSlipInfo(
       };
     } catch (error: any) {
       lastError = error;
-      // Retry only on 5xx or specific Google API rate limit errors
-      const isRetryable = error?.status === 503 || error?.status === 500 || error?.status === 429;
+      // Retry on 5xx, rate limits, or JSON parsing errors (SyntaxError)
+      const isRetryable = error?.status === 503 || error?.status === 500 || error?.status === 429 || error instanceof SyntaxError;
       if (isRetryable && attempt < MAX_RETRIES) {
-        console.warn(`[Vision Service] Attempt ${attempt} failed with ${error.status}. Retrying in 1.5s...`);
+        console.warn(`[Vision Service] Attempt ${attempt} failed: ${error.message}. Retrying in 1.5s...`);
         await new Promise(resolve => setTimeout(resolve, 1500));
       } else {
         break; // Stop retrying

@@ -73,7 +73,7 @@ export async function extractSlipInfo(
   try {
     const client = clientOverride || getGeminiClient();
     const base64Data = imageBuffer.toString('base64');
-    const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+    const model = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
 
     const response = await client.models.generateContent({
       model: model,

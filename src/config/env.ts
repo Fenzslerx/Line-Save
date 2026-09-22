@@ -12,8 +12,8 @@ export const config = {
     url: process.env.SUPABASE_URL || '',
     serviceKey: process.env.SUPABASE_SERVICE_KEY || ''
   },
-  anthropic: {
-    apiKey: process.env.ANTHROPIC_API_KEY || ''
+  gemini: {
+    apiKey: process.env.GEMINI_API_KEY || ''
   }
 };
 

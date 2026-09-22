@@ -44,7 +44,7 @@
    - `LINE_CHANNEL_ACCESS_TOKEN`: (ค่าที่ได้จาก LINE)
    - `SUPABASE_URL`: (ค่าที่ได้จาก Supabase)
    - `SUPABASE_SERVICE_KEY`: (service_role key จาก Supabase)
-   - `ANTHROPIC_API_KEY`: (API Key จาก console.anthropic.com)
+   - `GEMINI_API_KEY`: (API Key จาก aistudio.google.com)
 6. กด **Create Web Service** ➔ รอจนกระทั่งสถานะขึ้น **Live**
 7. คัดลอก URL ของ Web Service ที่ Render สร้างให้ (เช่น `https://line-expense-bot.onrender.com`)
 

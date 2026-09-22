@@ -1,4 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenAI } from '@google/genai';
 import { config } from '../config/env';
 
 export interface SlipExtractionResult {
@@ -9,18 +9,18 @@ export interface SlipExtractionResult {
   confidence: 'high' | 'medium' | 'low';
 }
 
-let anthropicClient: Anthropic | null = null;
+let geminiClient: GoogleGenAI | null = null;
 
-export function getAnthropicClient(): Anthropic {
-  if (!anthropicClient) {
-    if (!config.anthropic.apiKey) {
-      throw new Error('ANTHROPIC_API_KEY is not configured in environment variables.');
+export function getGeminiClient(): GoogleGenAI {
+  if (!geminiClient) {
+    if (!config.gemini.apiKey) {
+      throw new Error('GEMINI_API_KEY is not configured in environment variables.');
     }
-    anthropicClient = new Anthropic({
-      apiKey: config.anthropic.apiKey
+    geminiClient = new GoogleGenAI({
+      apiKey: config.gemini.apiKey
     });
   }
-  return anthropicClient;
+  return geminiClient;
 }
 
 const SYSTEM_PROMPT = `You are an expert AI specializing in analyzing payment slips, bank transfer slips, and merchant receipts, primarily for Thai financial institutions (e.g. KBank, SCB, KTB, BBL, Krungsri, PromptPay, TrueMoney).
@@ -55,12 +55,12 @@ Rules:
 6. Output MUST be ONLY valid raw JSON without markdown code fences (\`\`\`json) and no conversational text.`;
 
 /**
- * Extracts payment details from an image buffer using Claude Vision
+ * Extracts payment details from an image buffer using Google Gemini Vision
  */
 export async function extractSlipInfo(
   imageBuffer: Buffer,
   mimeType: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif' = 'image/jpeg',
-  clientOverride?: Anthropic
+  clientOverride?: GoogleGenAI
 ): Promise<SlipExtractionResult> {
   const fallbackResult: SlipExtractionResult = {
     is_slip: false,
@@ -71,42 +71,38 @@ export async function extractSlipInfo(
   };
 
   try {
-    const client = clientOverride || getAnthropicClient();
+    const client = clientOverride || getGeminiClient();
     const base64Data = imageBuffer.toString('base64');
-    const model = process.env.ANTHROPIC_MODEL || 'claude-3-5-sonnet-20241022';
+    const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
-    const response = await client.messages.create({
-      model,
-      max_tokens: 1024,
-      system: SYSTEM_PROMPT,
-      messages: [
+    const response = await client.models.generateContent({
+      model: model,
+      contents: [
         {
           role: 'user',
-          content: [
+          parts: [
             {
-              type: 'image',
-              source: {
-                type: 'base64',
-                media_type: mimeType,
+              inlineData: {
+                mimeType: mimeType,
                 data: base64Data
               }
             },
             {
-              type: 'text',
               text: 'Analyze this image and output the transaction details as JSON.'
             }
           ]
         }
-      ]
+      ],
+      config: {
+        systemInstruction: SYSTEM_PROMPT,
+        responseMimeType: 'application/json',
+      }
     });
 
-    const firstBlock = response.content[0];
-    if (!firstBlock || firstBlock.type !== 'text') {
+    const textContent = response.text || '';
+    if (!textContent) {
       return fallbackResult;
     }
-
-    // Strip markdown formatting if any was returned by mistake
-    const textContent = firstBlock.text.trim().replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '').trim();
 
     const parsed = JSON.parse(textContent);
 

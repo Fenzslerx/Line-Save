@@ -22,18 +22,29 @@ export interface SummaryData {
   memberBreakdown?: { nickname: string; total_paid: number; transaction_count: number }[];
 }
 
+const EXPENSE_CATEGORIES = [
+  { label: '🍔 อาหาร', value: 'อาหาร', color: '#FF6B6B' },
+  { label: '🚗 เดินทาง', value: 'เดินทาง', color: '#4D96FF' },
+  { label: '🛒 ของใช้', value: 'ของใช้', color: '#6BCB77' },
+  { label: '🎮 บันเทิง', value: 'บันเทิง', color: '#FFD93D' },
+  { label: '💡 บิล/รายเดือน', value: 'บิล/ค่าใช้จ่ายประจำ', color: '#9B51E0' },
+  { label: '📦 อื่นๆ', value: 'อื่นๆ', color: '#828282' }
+];
+
+const INCOME_CATEGORIES = [
+  { label: '💼 เงินเดือน', value: 'เงินเดือน', color: '#06C755' },
+  { label: '📈 ขายของ', value: 'ขายของ', color: '#4D96FF' },
+  { label: '🎁 ของขวัญ', value: 'ของขวัญ', color: '#FFD93D' },
+  { label: '🏦 ดอกเบี้ย/คืนเงิน', value: 'ดอกเบี้ย/คืนเงิน', color: '#9B51E0' },
+  { label: '📦 อื่นๆ', value: 'อื่นๆ', color: '#828282' }
+];
+
 /**
  * Creates Flex Message for selecting transaction category after slip is parsed
  */
 export function createCategorySelectionFlex(data: CategorySelectionData): messagingApi.FlexMessage {
-  const categories = [
-    { label: '🍔 อาหาร', value: 'อาหาร', color: '#FF6B6B' },
-    { label: '🚗 เดินทาง', value: 'เดินทาง', color: '#4D96FF' },
-    { label: '🛒 ของใช้', value: 'ของใช้', color: '#6BCB77' },
-    { label: '🎮 บันเทิง', value: 'บันเทิง', color: '#FFD93D' },
-    { label: '💡 บิล/รายเดือน', value: 'บิล/ค่าใช้จ่ายประจำ', color: '#9B51E0' },
-    { label: '📦 อื่นๆ', value: 'อื่นๆ', color: '#828282' }
-  ];
+  const isIncome = data.transactionData.type === 'income';
+  const categories = isIncome ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
 
   // Encode transaction details into postback data
   const basePostback = (cat: string) =>
@@ -42,6 +53,12 @@ export function createCategorySelectionFlex(data: CategorySelectionData): messag
       category: cat,
       tx: data.transactionData
     });
+
+  // Postback to flip the record between income and expense
+  const switchTypePostback = JSON.stringify({
+    action: 'switch_type',
+    tx: { ...data.transactionData, type: isIncome ? 'expense' : 'income' }
+  });
 
   // Group buttons into rows of 2
   const buttonRows: messagingApi.FlexBox[] = [];
@@ -82,7 +99,7 @@ export function createCategorySelectionFlex(data: CategorySelectionData): messag
         contents: [
           {
             type: 'text',
-            text: '🧾 ตรวจพบสลิปโอนเงิน',
+            text: isIncome ? '💰 ตรวจพบสลิปเงินเข้า' : '🧾 ตรวจพบสลิปโอนเงิน',
             color: '#FFFFFF',
             weight: 'bold',
             size: 'md'
@@ -136,10 +153,23 @@ export function createCategorySelectionFlex(data: CategorySelectionData): messag
           { type: 'separator', margin: 'md' },
           {
             type: 'text',
-            text: 'กรุณาเลือกหมวดหมู่ค่าใช้จ่าย:',
+            text: isIncome ? 'กรุณาเลือกหมวดหมู่รายรับ:' : 'กรุณาเลือกหมวดหมู่ค่าใช้จ่าย:',
             size: 'sm',
             color: '#555555',
             weight: 'bold',
+            margin: 'md'
+          },
+          {
+            type: 'button',
+            action: {
+              type: 'postback',
+              label: isIncome ? '💸 เปลี่ยนเป็นรายจ่าย' : '💰 เปลี่ยนเป็นรายรับ',
+              data: switchTypePostback,
+              displayText: isIncome ? 'เปลี่ยนเป็นรายจ่าย' : 'เปลี่ยนเป็นรายรับ'
+            },
+            style: 'primary',
+            color: isIncome ? '#FF6B6B' : '#06C755',
+            height: 'sm',
             margin: 'md'
           },
           {
@@ -176,6 +206,29 @@ export function createSummaryFlex(data: SummaryData): messagingApi.FlexMessage {
         ]
       }))
     : [{ type: 'text', text: 'ไม่มีรายการในช่วงเวลานี้', size: 'sm', color: '#888888' }];
+
+  const incomeBoxes: messagingApi.FlexComponent[] = [];
+  if (data.totalIncome !== undefined && data.totalIncome > 0) {
+    incomeBoxes.push(
+      { type: 'separator', margin: 'md' },
+      {
+        type: 'box',
+        layout: 'horizontal',
+        contents: [
+          { type: 'text', text: '💰 รายรับรวม', size: 'sm', color: '#555555', flex: 4 },
+          {
+            type: 'text',
+            text: `+฿${data.totalIncome.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            size: 'sm',
+            color: '#06C755',
+            align: 'end',
+            weight: 'bold',
+            flex: 4
+          }
+        ]
+      }
+    );
+  }
 
   const memberBoxes: messagingApi.FlexComponent[] = [];
   if (data.memberBreakdown && data.memberBreakdown.length > 0) {
@@ -247,12 +300,13 @@ export function createSummaryFlex(data: SummaryData): messagingApi.FlexMessage {
         contents: [
           {
             type: 'text',
-            text: '📁 ยอดแยกตามหมวดหมู่:',
+            text: '💸 ยอดจ่ายแยกตามหมวดหมู่:',
             weight: 'bold',
             size: 'sm',
             color: '#333333'
           },
           ...categoryContents,
+          ...incomeBoxes,
           ...memberBoxes
         ]
       }

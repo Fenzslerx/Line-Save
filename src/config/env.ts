@@ -8,20 +8,28 @@ export const config = {
     channelSecret: process.env.LINE_CHANNEL_SECRET || '',
     channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN || ''
   },
-  supabase: {
-    url: process.env.SUPABASE_URL || '',
-    serviceKey: process.env.SUPABASE_SERVICE_KEY || ''
-  },
   gemini: {
-    apiKey: process.env.GEMINI_API_KEY || ''
+    apiKey: process.env.GEMINI_API_KEY || '',
+    model: process.env.GEMINI_MODEL || 'gemini-3.6-flash'
   }
 };
+
+/**
+ * (Re)initialise config from a Cloudflare Workers env binding.
+ * Must be called before handling each request in src/worker.ts so that
+ * module-level clients (LINE, Gemini) see the bound secrets.
+ */
+export function initConfig(env: Record<string, string | undefined>) {
+  config.line.channelSecret = env.LINE_CHANNEL_SECRET || '';
+  config.line.channelAccessToken = env.LINE_CHANNEL_ACCESS_TOKEN || '';
+  config.gemini.apiKey = env.GEMINI_API_KEY || '';
+  config.gemini.model = env.GEMINI_MODEL || process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+}
 
 export function validateConfig() {
   const missing: string[] = [];
   if (!config.line.channelSecret) missing.push('LINE_CHANNEL_SECRET');
-  if (!config.supabase.url) missing.push('SUPABASE_URL');
-  if (!config.supabase.serviceKey) missing.push('SUPABASE_SERVICE_KEY');
+  if (!config.line.channelAccessToken) missing.push('LINE_CHANNEL_ACCESS_TOKEN');
 
   if (missing.length > 0) {
     console.warn(`[Config Warning] Missing environment variables: ${missing.join(', ')}`);

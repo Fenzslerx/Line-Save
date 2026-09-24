@@ -3,13 +3,15 @@ import crypto from 'crypto';
 import { config } from '../config/env';
 import { downloadMessageImage, replyLineMessage, showLoadingAnimation } from '../services/line';
 import { extractSlipInfo } from '../services/vision';
-import { getSupabaseClient } from '../db/client';
+import { getD1 } from '../db/client';
 import {
   createTransaction,
   getCategorySummary,
   getGroupMemberSummary,
   upsertUser,
-  upsertGroup
+  upsertGroup,
+  getCachedExtraction,
+  saveExtractionCache
 } from '../db/queries';
 import {
   createCategorySelectionFlex,
@@ -86,12 +88,12 @@ export async function processWebhookEvent(event: any): Promise<void> {
   }
 
   // Auto-record user if userId is present
-  if (userId && config.supabase.url && config.supabase.serviceKey) {
+  if (userId) {
     try {
-      const supabase = getSupabaseClient();
-      await upsertUser(supabase, { line_user_id: userId });
+      const db = getD1();
+      await upsertUser(db, { line_user_id: userId });
       if (groupId) {
-        await upsertGroup(supabase, { line_group_id: groupId });
+        await upsertGroup(db, { line_group_id: groupId });
       }
     } catch (e) {
       console.warn('[DB Auto-record] Failed to record user/group:', e);
@@ -124,6 +126,24 @@ async function handleImageMessage(event: any, userId: string, groupId: string | 
   const messageId = event.message.id;
   const replyToken = event.replyToken;
 
+  // Multiple slips sent in a burst each arrive as their own event and are
+  // processed in parallel (see webhookHandler). LINE may also redeliver a
+  // message if the webhook response is slow — skip anything already handled.
+  let db;
+  try {
+    db = getD1();
+  } catch {
+    db = null;
+  }
+
+  if (db) {
+    const seen = await getCachedExtraction(db, `msg:${messageId}`).catch(() => null);
+    if (seen) {
+      console.log(`[Slip Detection] Message ${messageId} already processed. Skipping duplicate.`);
+      return;
+    }
+  }
+
   const targetChatId = groupId || userId;
   if (targetChatId) {
     await showLoadingAnimation(targetChatId, 20); // max 20 seconds loading animation
@@ -132,7 +152,23 @@ async function handleImageMessage(event: any, userId: string, groupId: string | 
   console.log(`[Slip Detection] Downloading image for message: ${messageId}`);
   const imageBuffer = await downloadMessageImage(messageId);
 
-  const extraction = await extractSlipInfo(imageBuffer);
+  // Identical slip images resolve instantly from cache instead of calling the LLM again
+  const imageHash = `img:${crypto.createHash('sha256').update(imageBuffer).digest('hex')}`;
+  let extraction = db ? await getCachedExtraction(db, imageHash).catch(() => null) : null;
+  if (extraction) {
+    console.log('[Slip Detection] Extraction served from cache.');
+  } else {
+    extraction = await extractSlipInfo(imageBuffer);
+    if (db && extraction.is_slip) {
+      await saveExtractionCache(db, imageHash, extraction).catch(() => {});
+    }
+  }
+
+  // Mark the message as handled so redeliveries are skipped
+  if (db) {
+    await saveExtractionCache(db, `msg:${messageId}`, extraction).catch(() => {});
+  }
+
   console.log('[Slip Detection] Vision Result:', extraction);
 
   // If not a slip, stay completely silent (especially in groups)
@@ -143,6 +179,7 @@ async function handleImageMessage(event: any, userId: string, groupId: string | 
 
   const todayStr = new Date().toISOString().split('T')[0];
   const txDate = extraction.date || todayStr;
+  const txType: 'income' | 'expense' = extraction.direction === 'income' ? 'income' : 'expense';
 
   const flexMessage = createCategorySelectionFlex({
     amount: extraction.amount,
@@ -154,7 +191,7 @@ async function handleImageMessage(event: any, userId: string, groupId: string | 
       amount: extraction.amount,
       date: txDate,
       merchant: extraction.merchant,
-      type: 'expense'
+      type: txType
     }
   });
 
@@ -172,8 +209,8 @@ async function handleTextMessage(event: any, userId: string, groupId: string | n
   const nameMatch = text.match(/^(?:ชื่อ|name)\s+(.+)$/i);
   if (nameMatch && userId) {
     const nickname = nameMatch[1].trim();
-    const supabase = getSupabaseClient();
-    await upsertUser(supabase, { line_user_id: userId, nickname });
+    const db = getD1();
+    await upsertUser(db, { line_user_id: userId, nickname });
 
     await replyLineMessage(replyToken, [
       {
@@ -186,13 +223,13 @@ async function handleTextMessage(event: any, userId: string, groupId: string | n
 
   // Command: Summary ("สรุป")
   if (/^(สรุป|ยอด|summary)$/i.test(text)) {
-    const supabase = getSupabaseClient();
+    const db = getD1();
     const now = new Date();
     // Default to current month
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
 
-    const categorySummary = await getCategorySummary(supabase, {
+    const categorySummary = await getCategorySummary(db, {
       userId: groupId ? undefined : userId,
       groupId: groupId || undefined,
       startDate: startOfMonth,
@@ -203,10 +240,14 @@ async function handleTextMessage(event: any, userId: string, groupId: string | n
       .filter(item => item.type === 'expense')
       .reduce((sum, item) => sum + Number(item.total_amount), 0);
 
+    const totalIncome = categorySummary
+      .filter(item => item.type === 'income')
+      .reduce((sum, item) => sum + Number(item.total_amount), 0);
+
     let memberBreakdown: { nickname: string; total_paid: number; transaction_count: number }[] | undefined;
 
     if (groupId) {
-      memberBreakdown = await getGroupMemberSummary(supabase, {
+      memberBreakdown = await getGroupMemberSummary(db, {
         groupId,
         startDate: startOfMonth,
         endDate: endOfMonth
@@ -222,7 +263,9 @@ async function handleTextMessage(event: any, userId: string, groupId: string | n
     const summaryFlex = createSummaryFlex({
       periodLabel: currentMonthLabel,
       totalExpense,
-      categoryBreakdown: categorySummary,
+      totalIncome,
+      // Only expense rows belong in the expense category breakdown; income is shown separately
+      categoryBreakdown: categorySummary.filter(item => item.type === 'expense'),
       memberBreakdown
     });
 
@@ -243,13 +286,13 @@ async function handlePostbackEvent(event: any, userId: string, groupId: string |
     const parsed = JSON.parse(postbackDataRaw);
     if (parsed.action === 'select_category' && parsed.tx) {
       const { category, tx } = parsed;
-      const supabase = getSupabaseClient();
+      const db = getD1();
 
-      await createTransaction(supabase, {
+      await createTransaction(db, {
         line_user_id: tx.userId || userId,
         line_group_id: tx.groupId || groupId,
         amount: tx.amount,
-        type: tx.type || 'expense',
+        type: tx.type === 'income' ? 'income' : 'expense',
         category,
         merchant: tx.merchant || null,
         date: tx.date || new Date().toISOString().split('T')[0]
@@ -257,6 +300,25 @@ async function handlePostbackEvent(event: any, userId: string, groupId: string |
 
       const confirmedFlex = createConfirmedFlex(category, tx.amount, tx.merchant);
       await replyLineMessage(replyToken, [confirmedFlex]);
+    }
+    // User flipped the record between income and expense -> re-render the category card
+    else if (parsed.action === 'switch_type' && parsed.tx) {
+      const tx = parsed.tx;
+      const flexMessage = createCategorySelectionFlex({
+        amount: tx.amount,
+        merchant: tx.merchant || null,
+        date: tx.date,
+        transactionData: {
+          userId: tx.userId || userId,
+          groupId: tx.groupId || groupId,
+          amount: tx.amount,
+          date: tx.date,
+          merchant: tx.merchant || null,
+          type: tx.type === 'income' ? 'income' : 'expense'
+        }
+      });
+
+      await replyLineMessage(replyToken, [flexMessage]);
     }
   } catch (err) {
     console.error('[Postback Handler] Failed to parse postback data or record transaction:', err);

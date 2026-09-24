@@ -1,6 +1,6 @@
 import { createApp } from './app';
 import { config, validateConfig } from './config/env';
-import { checkSupabaseConnection } from './db/client';
+import { checkDatabaseConnection } from './db/client';
 
 validateConfig();
 
@@ -13,13 +13,13 @@ app.listen(config.port, async () => {
 
   // Non-blocking connection check on startup
   try {
-    const dbStatus = await checkSupabaseConnection();
+    const dbStatus = await checkDatabaseConnection();
     if (dbStatus.ok) {
-      console.log(`[Supabase] ${dbStatus.message}`);
+      console.log(`[D1] ${dbStatus.message}`);
     } else {
-      console.warn(`[Supabase Warning] ${dbStatus.message}`);
+      console.warn(`[D1 Warning] ${dbStatus.message}`);
     }
   } catch (err) {
-    console.warn('[Supabase Warning] Unexpected error during connection check:', err);
+    console.warn('[D1 Warning] Unexpected error during connection check:', err);
   }
 });

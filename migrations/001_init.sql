@@ -89,8 +89,13 @@ as $$
     count(t.id) as transaction_count
   from transactions t
   where
-    (p_group_id is not null and t.line_group_id = p_group_id)
-    or (p_group_id is null and p_user_id is not null and t.line_user_id = p_user_id and t.line_group_id is null)
+    -- Parentheses are required: "a or b and c and d" evaluates as "a or (b and c and d)",
+    -- which would drop the date filters from the group branch entirely.
+    (
+      (p_group_id is not null and t.line_group_id = p_group_id)
+      or
+      (p_group_id is null and p_user_id is not null and t.line_user_id = p_user_id and t.line_group_id is null)
+    )
     and (p_start_date is null or t.date >= p_start_date)
     and (p_end_date is null or t.date <= p_end_date)
   group by coalesce(t.category, 'ไม่ระบุ'), t.type

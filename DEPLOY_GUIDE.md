@@ -14,6 +14,8 @@
 
 > ⚠️ **หมายเหตุสำคัญ**: Supabase Free Tier จะ **Auto-pause (หยุดชั่วคราว)** อัตโนมัติหากไม่มีการใช้งานเกิน 7 วัน หากบอทไม่บันทึกข้อมูล ให้ล็อกอินเข้า Supabase Dashboard แล้วกดปุ่ม **Restore**
 
+> 🛠 **ถ้าเคย Deploy ไปแล้วก่อนการแก้ไขนี้**: ให้เปิด SQL Editor แล้วรัน [migrations/002_fix_summary_date_filter.sql](migrations/002_fix_summary_date_filter.sql) เพิ่มด้วย 1 ครั้ง (แก้บั๊กที่ "สรุป" ในกลุ่มนับยอดทั้งหมดตั้งแต่ต้น ไม่ยึดช่วงเดือน)
+
 ---
 
 ## 2. ตั้งค่า LINE Developers Console

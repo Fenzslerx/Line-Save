@@ -4,3 +4,9 @@ dist/
 *.log
 coverage/
 .DS_Store
+backup/
+.wrangler/
+jest_run_output.txt
+tsc_output.txt
+jest_verbose_output.txt
+npm_install_output.txt

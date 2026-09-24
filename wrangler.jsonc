@@ -1,0 +1,21 @@
+{
+  // Cloudflare Workers configuration for the LINE Expense Bot.
+  // Deploy: npx wrangler deploy
+  // Secrets (set once with `npx wrangler secret put <NAME>`):
+  //   LINE_CHANNEL_SECRET, LINE_CHANNEL_ACCESS_TOKEN,
+  //   SUPABASE_URL, SUPABASE_SERVICE_KEY, GEMINI_API_KEY
+  "name": "line-expense-bot",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "line-expense-db",
+      "database_id": "abc6d94e-639f-4311-893c-bb9eec402ea9"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

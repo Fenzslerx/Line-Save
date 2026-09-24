@@ -87,6 +87,69 @@ describe('Vision LLM Slip Extraction Service (Gemini)', () => {
     consoleErrorSpy.mockRestore();
   });
 
+  it('should extract direction "income" for an incoming-transfer slip', async () => {
+    const mockGemini = {
+      models: {
+        generateContent: jest.fn().mockResolvedValue({
+          text: JSON.stringify({
+            is_slip: true,
+            amount: 1000,
+            date: '2026-09-25',
+            merchant: 'นายสมชาย',
+            direction: 'income',
+            confidence: 'high'
+          })
+        })
+      }
+    } as any;
+
+    const result = await extractSlipInfo(dummyBuffer, 'image/jpeg', mockGemini);
+
+    expect(result.is_slip).toBe(true);
+    expect(result.direction).toBe('income');
+  });
+
+  it('should extract direction "expense" for an outgoing-payment slip', async () => {
+    const mockGemini = {
+      models: {
+        generateContent: jest.fn().mockResolvedValue({
+          text: JSON.stringify({
+            is_slip: true,
+            amount: 250,
+            date: '2026-09-25',
+            merchant: '7-Eleven',
+            direction: 'expense',
+            confidence: 'high'
+          })
+        })
+      }
+    } as any;
+
+    const result = await extractSlipInfo(dummyBuffer, 'image/jpeg', mockGemini);
+
+    expect(result.direction).toBe('expense');
+  });
+
+  it('should default direction to null when the model omits it', async () => {
+    const mockGemini = {
+      models: {
+        generateContent: jest.fn().mockResolvedValue({
+          text: JSON.stringify({
+            is_slip: true,
+            amount: 250,
+            date: '2026-09-25',
+            merchant: '7-Eleven',
+            confidence: 'high'
+          })
+        })
+      }
+    } as any;
+
+    const result = await extractSlipInfo(dummyBuffer, 'image/jpeg', mockGemini);
+
+    expect(result.direction).toBeNull();
+  });
+
   it('should gracefully handle API call failures', async () => {
     const mockGemini = {
       models: {

@@ -27,3 +27,18 @@ CREATE TABLE IF NOT EXISTS slip_dedup_cache (
   result_json TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
+
+-- Per-user monthly budget shown on the LIFF dashboard
+CREATE TABLE IF NOT EXISTS budgets (
+  user_id TEXT PRIMARY KEY,
+  monthly_budget REAL NOT NULL DEFAULT 0,
+  updated_at TEXT
+);
+
+-- Keyword -> category auto-fill rules taught from the LIFF dashboard
+CREATE TABLE IF NOT EXISTS category_rules (
+  keyword TEXT PRIMARY KEY,
+  category TEXT NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('income', 'expense')),
+  created_at TEXT DEFAULT (datetime('now'))
+);

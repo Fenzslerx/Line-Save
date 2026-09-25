@@ -7,6 +7,7 @@ export interface SlipExtractionResult {
   date: string | null; // YYYY-MM-DD
   merchant: string | null;
   direction: 'income' | 'expense' | null; // null when the slip does not clearly show money in vs out
+  category: string | null; // best-fit category name, normalized by the webhook
   confidence: 'high' | 'medium' | 'low';
 }
 
@@ -33,6 +34,7 @@ Your job is to examine the provided image and extract information into a strictl
   "date": "YYYY-MM-DD" | null,
   "merchant": string | null,
   "direction": "income" | "expense" | null,
+  "category": string | null,
   "confidence": "high" | "medium" | "low"
 }
 
@@ -57,7 +59,13 @@ Rules:
    - Direction of the arrow matters: FROM someone TO the account holder = "income"; FROM the account holder TO someone = "expense".
    - A merchant payment receipt (ใบเสร็จ/สลิปร้านค้า) is always "expense".
    - Set null ONLY when the image genuinely makes it impossible to tell.
-6. "confidence":
+6. "category":
+   - Classify the transaction into EXACTLY ONE of these category names (verbatim Thai):
+   - For "expense": "อาหารและเครื่องดื่ม" (food/drink/restaurant/cafe/groceries), "การเดินทาง" (fuel/toll/parking/taxi/bus/train/delivery fee), "ของใช้ทั่วไป" (household/personal items/clothes/medicine), "บิลและสาธารณูปโภค" (utility bills/phone/internet/insurance/rent), "อื่นๆ" (anything else).
+   - For "income": "เงินเดือน" (salary), "ขายของ" (sales), "รายรับทั่วไป" (transfers received/refunds/other income), "อื่นๆ".
+   - Use hints from the merchant name and slip type; when truly ambiguous use "อื่นๆ".
+   - If not a slip, set to null.
+7. "confidence":
    - "high": Clear slip, sharp image, all fields unambiguous.
    - "medium": Readable but some fields slightly unclear or blurry.
    - "low": Image is very blurry, corrupted, partially cropped, or is not a slip.
@@ -77,6 +85,7 @@ export async function extractSlipInfo(
     date: null,
     merchant: null,
     direction: null,
+    category: null,
     confidence: 'low'
   };
 
@@ -120,6 +129,7 @@ export async function extractSlipInfo(
         date: typeof parsed.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date) ? parsed.date : null,
         merchant: parsed.merchant ? String(parsed.merchant).trim() : null,
         direction: parsed.direction === 'income' || parsed.direction === 'expense' ? parsed.direction : null,
+        category: parsed.category && typeof parsed.category === 'string' ? parsed.category.trim() : null,
         confidence: ['high', 'medium', 'low'].includes(parsed.confidence) ? parsed.confidence : 'low'
       };
     } catch (error: any) {

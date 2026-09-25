@@ -1,23 +1,21 @@
 import {
-  createCategorySelectionFlex,
-  createSummaryFlex,
-  createConfirmedFlex
+  createAutoSavedFlex,
+  createSummaryFlex
 } from '../src/templates/flex';
+import { config } from '../src/config/env';
 
 describe('Flex Message Templates', () => {
-  it('should generate valid Category Selection Flex Message', () => {
-    const flex = createCategorySelectionFlex({
+  beforeAll(() => {
+    config.liffId = 'TEST_LIFF_ID';
+  });
+
+  it('should generate an auto-saved expense card with a single LIFF button', () => {
+    const flex = createAutoSavedFlex({
       amount: 450,
       merchant: 'GrabFood',
-      date: '2026-09-23',
-      transactionData: {
-        userId: 'U12345',
-        groupId: 'G9876',
-        amount: 450,
-        date: '2026-09-23',
-        merchant: 'GrabFood',
-        type: 'expense'
-      }
+      date: '2026-09-25',
+      type: 'expense',
+      category: 'อาหารและเครื่องดื่ม'
     });
 
     expect(flex.type).toBe('flex');
@@ -25,21 +23,75 @@ describe('Flex Message Templates', () => {
     expect(flex.contents.type).toBe('bubble');
 
     const bubble = flex.contents as any;
-    expect(bubble.header).toBeDefined();
-    expect(bubble.body).toBeDefined();
+    const bodyJson = JSON.stringify(bubble.body);
+    expect(bodyJson).toContain('อาหารและเครื่องดื่ม');
+    expect(bodyJson).toContain('GrabFood');
 
-    // Check postback buttons
-    const bodyContents = bubble.body.contents;
-    const buttonBox = bodyContents[bodyContents.length - 1];
-    expect(buttonBox.contents.length).toBeGreaterThan(0);
+    // Exactly one button: opens the LIFF dashboard
+    const buttons = collectButtons(bubble);
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0].action.type).toBe('uri');
+    expect(buttons[0].action.uri).toBe('https://liff.line.me/TEST_LIFF_ID');
+    expect(buttons[0].action.label).toContain('ดูรายการ');
 
-    const firstRow = buttonBox.contents[0];
-    const firstButton = firstRow.contents[0];
-    expect(firstButton.action.type).toBe('postback');
-    const parsedData = JSON.parse(firstButton.action.data);
-    expect(parsedData.action).toBe('select_category');
-    expect(parsedData.tx.amount).toBe(450);
+    // No interactive postbacks anywhere — fully automatic flow
+    expect(JSON.stringify(flex)).not.toContain('postback');
+    // Expense sign shown
+    expect(JSON.stringify(bubble.header)).toContain('−฿450');
   });
+
+  it('should generate an auto-saved income card with + sign and income type row', () => {
+    const flex = createAutoSavedFlex({
+      amount: 1000,
+      merchant: 'นายสมชาย',
+      date: '2026-09-25',
+      type: 'income',
+      category: 'รายรับทั่วไป'
+    });
+
+    const bubble = flex.contents as any;
+    expect(JSON.stringify(bubble.header)).toContain('+฿1,000');
+    expect(JSON.stringify(bubble.body)).toContain('รายรับ');
+
+    const buttons = collectButtons(bubble);
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0].action.type).toBe('uri');
+  });
+
+  it('should omit the LIFF button when LIFF_ID is not configured', () => {
+    config.liffId = '';
+    const flex = createAutoSavedFlex({
+      amount: 250,
+      merchant: null,
+      date: '2026-09-25',
+      type: 'expense',
+      category: 'อื่นๆ'
+    });
+    const bubble = flex.contents as any;
+    expect(collectButtons(bubble)).toHaveLength(0);
+    expect(JSON.stringify(bubble.body)).toContain('ไม่ระบุ');
+    config.liffId = 'TEST_LIFF_ID';
+  });
+
+  // Helper: collect every button inside the bubble
+  function collectButtons(bubble: any): any[] {
+    const buttons: any[] = [];
+    const walk = (node: any) => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) {
+        node.forEach(walk);
+        return;
+      }
+      if (node.type === 'button' && node.action) {
+        buttons.push(node);
+      }
+      for (const key of ['contents', 'header', 'body', 'footer']) {
+        if (node[key]) walk(node[key]);
+      }
+    };
+    walk(bubble);
+    return buttons;
+  }
 
   it('should generate Summary Flex Message with member breakdown for groups', () => {
     const flex = createSummaryFlex({
@@ -64,110 +116,6 @@ describe('Flex Message Templates', () => {
     expect(bodyJson).toContain('ฟ้า');
     expect(bodyJson).toContain('เจ');
     expect(bodyJson).toContain('อาหาร');
-  });
-
-  it('should generate Confirmed Flex Message', () => {
-    const flex = createConfirmedFlex('อาหาร', 250, '7-Eleven');
-    expect(flex.type).toBe('flex');
-    expect(flex.altText).toContain('บันทึกเรียบร้อย');
-    const json = JSON.stringify(flex);
-    expect(json).toContain('อาหาร');
-    expect(json).toContain('7-Eleven');
-  });
-
-  // Helper: collect every postback button inside the bubble
-  function collectPostbackButtons(bubble: any): any[] {
-    const buttons: any[] = [];
-    const walk = (node: any) => {
-      if (!node || typeof node !== 'object') return;
-      if (Array.isArray(node)) {
-        node.forEach(walk);
-        return;
-      }
-      if (node.type === 'button' && node.action?.type === 'postback') {
-        buttons.push(node);
-      }
-      for (const key of ['contents', 'header', 'body', 'footer']) {
-        if (node[key]) walk(node[key]);
-      }
-    };
-    walk(bubble);
-    return buttons;
-  }
-
-  it('should offer income categories for an income slip and a toggle back to expense', () => {
-    const flex = createCategorySelectionFlex({
-      amount: 1000,
-      merchant: 'นายสมชาย',
-      date: '2026-09-25',
-      transactionData: {
-        userId: 'U12345',
-        groupId: null,
-        amount: 1000,
-        date: '2026-09-25',
-        merchant: 'นายสมชาย',
-        type: 'income'
-      }
-    });
-
-    const bubble = flex.contents as any;
-    const buttons = collectPostbackButtons(bubble);
-    const categoryButtons = buttons
-      .map(b => JSON.parse(b.action.data))
-      .filter(d => d.action === 'select_category');
-
-    // Income transaction must carry type income into every save button
-    expect(categoryButtons.length).toBeGreaterThan(0);
-    for (const d of categoryButtons) {
-      expect(d.tx.type).toBe('income');
-    }
-
-    // Income categories offered, expense categories not
-    const bodyJson = JSON.stringify(bubble.body);
-    expect(bodyJson).toContain('เงินเดือน');
-    expect(bodyJson).toContain('กรุณาเลือกหมวดหมู่รายรับ');
-    expect(bodyJson).not.toContain('อาหาร');
-
-    // A toggle to switch the record back to expense
-    const switchButtons = buttons
-      .map(b => JSON.parse(b.action.data))
-      .filter(d => d.action === 'switch_type');
-    expect(switchButtons).toHaveLength(1);
-    expect(switchButtons[0].tx.type).toBe('expense');
-    expect(switchButtons[0].tx.amount).toBe(1000);
-  });
-
-  it('should keep expense categories for an expense slip and offer a toggle to income', () => {
-    const flex = createCategorySelectionFlex({
-      amount: 450,
-      merchant: 'GrabFood',
-      date: '2026-09-25',
-      transactionData: {
-        userId: 'U12345',
-        groupId: null,
-        amount: 450,
-        date: '2026-09-25',
-        merchant: 'GrabFood',
-        type: 'expense'
-      }
-    });
-
-    const bubble = flex.contents as any;
-    const buttons = collectPostbackButtons(bubble);
-    const categoryButtons = buttons
-      .map(b => JSON.parse(b.action.data))
-      .filter(d => d.action === 'select_category');
-
-    expect(categoryButtons.length).toBeGreaterThan(0);
-    for (const d of categoryButtons) {
-      expect(d.tx.type).toBe('expense');
-    }
-
-    const switchButtons = buttons
-      .map(b => JSON.parse(b.action.data))
-      .filter(d => d.action === 'switch_type');
-    expect(switchButtons).toHaveLength(1);
-    expect(switchButtons[0].tx.type).toBe('income');
   });
 
   it('should show income total as its own section in the Summary Flex Message', () => {

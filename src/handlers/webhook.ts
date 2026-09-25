@@ -13,11 +13,37 @@ import {
   getCachedExtraction,
   saveExtractionCache
 } from '../db/queries';
+import { findCategoryRule } from '../db/liff';
 import {
-  createCategorySelectionFlex,
-  createSummaryFlex,
-  createConfirmedFlex
+  createAutoSavedFlex,
+  createSummaryFlex
 } from '../templates/flex';
+
+const EXPENSE_CATEGORIES = ['อาหารและเครื่องดื่ม', 'การเดินทาง', 'ของใช้ทั่วไป', 'บิลและสาธารณูปโภค', 'อื่นๆ'];
+const INCOME_CATEGORIES = ['เงินเดือน', 'ขายของ', 'รายรับทั่วไป', 'อื่นๆ'];
+
+/**
+ * Normalizes the LLM's category guess into our fixed category list.
+ * Tries an exact/substring match first, then falls back to "อื่นๆ".
+ */
+function normalizeCategory(raw: string | null, type: 'income' | 'expense'): string {
+  const allowed = type === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
+  if (raw) {
+    const exact = allowed.find(c => c === raw.trim());
+    if (exact) return exact;
+    const loose = allowed.find(c => raw.includes(c) || c.includes(raw.trim()));
+    if (loose) return loose;
+    // Common synonyms the model might produce
+    const synonyms: Record<string, string> = {
+      'อาหาร': 'อาหารและเครื่องดื่ม', 'เดินทาง': 'การเดินทาง', 'ของใช้': 'ของใช้ทั่วไป',
+      'บิล': 'บิลและสาธารณูปโภค', 'ค่าใช้จ่ายประจำ': 'บิลและสาธารณูปโภค'
+    };
+    for (const [key, value] of Object.entries(synonyms)) {
+      if (raw.includes(key) && allowed.includes(value)) return value;
+    }
+  }
+  return 'อื่นๆ';
+}
 
 /**
  * Validates the LINE webhook signature using HMAC-SHA256
@@ -113,9 +139,10 @@ export async function processWebhookEvent(event: any): Promise<void> {
       await handleTextMessage(event, userId, groupId);
     }
   }
-  // 2. Handle Postback (Category selection)
+  // 2. Handle Postback — kept as a no-op: the bot now auto-saves slips, so no
+  // interactive postback cards are sent anymore (legacy clients may still send events).
   else if (event.type === 'postback') {
-    await handlePostbackEvent(event, userId, groupId);
+    // nothing to do
   }
 }
 
@@ -181,18 +208,33 @@ async function handleImageMessage(event: any, userId: string, groupId: string | 
   const txDate = extraction.date || todayStr;
   const txType: 'income' | 'expense' = extraction.direction === 'income' ? 'income' : 'expense';
 
-  const flexMessage = createCategorySelectionFlex({
+  // Category priority: a rule the user taught via LIFF > the LLM's guess > "อื่นๆ"
+  const saveDb = db ?? getD1();
+  let category = '';
+  if (extraction.merchant) {
+    const rule = await findCategoryRule(saveDb, extraction.merchant).catch(() => null);
+    if (rule && rule.type === txType) category = rule.category;
+  }
+  if (!category) category = normalizeCategory(extraction.category, txType);
+
+  // Auto-save immediately — no category picker, no user interaction required
+  await createTransaction(saveDb, {
+    line_user_id: userId,
+    line_group_id: groupId,
+    amount: extraction.amount,
+    type: txType,
+    category,
+    merchant: extraction.merchant,
+    date: txDate
+  });
+  console.log(`[Slip Detection] Auto-saved: ${txType} ฿${extraction.amount} [${category}]`);
+
+  const flexMessage = createAutoSavedFlex({
     amount: extraction.amount,
     merchant: extraction.merchant,
     date: txDate,
-    transactionData: {
-      userId,
-      groupId,
-      amount: extraction.amount,
-      date: txDate,
-      merchant: extraction.merchant,
-      type: txType
-    }
+    type: txType,
+    category
   });
 
   await replyLineMessage(replyToken, [flexMessage]);
@@ -270,57 +312,5 @@ async function handleTextMessage(event: any, userId: string, groupId: string | n
     });
 
     await replyLineMessage(replyToken, [summaryFlex]);
-  }
-}
-
-/**
- * Handles postback events (e.g. user selected a category button)
- */
-async function handlePostbackEvent(event: any, userId: string, groupId: string | null) {
-  const replyToken = event.replyToken;
-  const postbackDataRaw = event.postback?.data;
-
-  if (!postbackDataRaw) return;
-
-  try {
-    const parsed = JSON.parse(postbackDataRaw);
-    if (parsed.action === 'select_category' && parsed.tx) {
-      const { category, tx } = parsed;
-      const db = getD1();
-
-      await createTransaction(db, {
-        line_user_id: tx.userId || userId,
-        line_group_id: tx.groupId || groupId,
-        amount: tx.amount,
-        type: tx.type === 'income' ? 'income' : 'expense',
-        category,
-        merchant: tx.merchant || null,
-        date: tx.date || new Date().toISOString().split('T')[0]
-      });
-
-      const confirmedFlex = createConfirmedFlex(category, tx.amount, tx.merchant);
-      await replyLineMessage(replyToken, [confirmedFlex]);
-    }
-    // User flipped the record between income and expense -> re-render the category card
-    else if (parsed.action === 'switch_type' && parsed.tx) {
-      const tx = parsed.tx;
-      const flexMessage = createCategorySelectionFlex({
-        amount: tx.amount,
-        merchant: tx.merchant || null,
-        date: tx.date,
-        transactionData: {
-          userId: tx.userId || userId,
-          groupId: tx.groupId || groupId,
-          amount: tx.amount,
-          date: tx.date,
-          merchant: tx.merchant || null,
-          type: tx.type === 'income' ? 'income' : 'expense'
-        }
-      });
-
-      await replyLineMessage(replyToken, [flexMessage]);
-    }
-  } catch (err) {
-    console.error('[Postback Handler] Failed to parse postback data or record transaction:', err);
   }
 }

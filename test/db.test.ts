@@ -152,7 +152,7 @@ describe('D1 Query Layer', () => {
 
   it('should save extraction into the dedup cache with an upsert', async () => {
     const db = makeFakeD1();
-    const result = { is_slip: true, amount: 100, date: null, merchant: null, direction: null, confidence: 'low' as const };
+    const result = { is_slip: true, amount: 100, date: null, merchant: null, direction: null, category: null, confidence: 'low' as const };
     await saveExtractionCache(db, 'msg:M1', result);
 
     const { sql, params } = db.calls[0];

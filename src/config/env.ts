@@ -11,7 +11,8 @@ export const config = {
   gemini: {
     apiKey: process.env.GEMINI_API_KEY || '',
     model: process.env.GEMINI_MODEL || 'gemini-3.6-flash'
-  }
+  },
+  liffId: process.env.LIFF_ID || ''
 };
 
 /**
@@ -24,6 +25,7 @@ export function initConfig(env: Record<string, string | undefined>) {
   config.line.channelAccessToken = env.LINE_CHANNEL_ACCESS_TOKEN || '';
   config.gemini.apiKey = env.GEMINI_API_KEY || '';
   config.gemini.model = env.GEMINI_MODEL || process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+  config.liffId = env.LIFF_ID || '';
 }
 
 export function validateConfig() {

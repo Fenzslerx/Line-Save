@@ -150,6 +150,47 @@ describe('Vision LLM Slip Extraction Service (Gemini)', () => {
     expect(result.direction).toBeNull();
   });
 
+  it('should extract the LLM-assigned category', async () => {
+    const mockGemini = {
+      models: {
+        generateContent: jest.fn().mockResolvedValue({
+          text: JSON.stringify({
+            is_slip: true,
+            amount: 250,
+            date: '2026-09-25',
+            merchant: '7-Eleven',
+            direction: 'expense',
+            category: 'ของใช้ทั่วไป',
+            confidence: 'high'
+          })
+        })
+      }
+    } as any;
+
+    const result = await extractSlipInfo(dummyBuffer, 'image/jpeg', mockGemini);
+    expect(result.category).toBe('ของใช้ทั่วไป');
+  });
+
+  it('should default category to null when the model omits it', async () => {
+    const mockGemini = {
+      models: {
+        generateContent: jest.fn().mockResolvedValue({
+          text: JSON.stringify({
+            is_slip: true,
+            amount: 250,
+            date: '2026-09-25',
+            merchant: '7-Eleven',
+            direction: 'expense',
+            confidence: 'high'
+          })
+        })
+      }
+    } as any;
+
+    const result = await extractSlipInfo(dummyBuffer, 'image/jpeg', mockGemini);
+    expect(result.category).toBeNull();
+  });
+
   it('should gracefully handle API call failures', async () => {
     const mockGemini = {
       models: {

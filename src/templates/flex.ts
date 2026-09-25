@@ -1,17 +1,12 @@
 import { messagingApi } from '@line/bot-sdk';
+import { config } from '../config/env';
 
-export interface CategorySelectionData {
+export interface AutoSavedData {
   amount: number;
   merchant: string | null;
   date: string;
-  transactionData: {
-    userId: string;
-    groupId?: string | null;
-    amount: number;
-    date: string;
-    merchant?: string | null;
-    type: 'expense' | 'income';
-  };
+  type: 'expense' | 'income';
+  category: string;
 }
 
 export interface SummaryData {
@@ -22,91 +17,85 @@ export interface SummaryData {
   memberBreakdown?: { nickname: string; total_paid: number; transaction_count: number }[];
 }
 
-const EXPENSE_CATEGORIES = [
-  { label: '🍔 อาหาร', value: 'อาหาร', color: '#FF6B6B' },
-  { label: '🚗 เดินทาง', value: 'เดินทาง', color: '#4D96FF' },
-  { label: '🛒 ของใช้', value: 'ของใช้', color: '#6BCB77' },
-  { label: '🎮 บันเทิง', value: 'บันเทิง', color: '#FFD93D' },
-  { label: '💡 บิล/รายเดือน', value: 'บิล/ค่าใช้จ่ายประจำ', color: '#9B51E0' },
-  { label: '📦 อื่นๆ', value: 'อื่นๆ', color: '#828282' }
-];
-
-const INCOME_CATEGORIES = [
-  { label: '💼 เงินเดือน', value: 'เงินเดือน', color: '#06C755' },
-  { label: '📈 ขายของ', value: 'ขายของ', color: '#4D96FF' },
-  { label: '🎁 ของขวัญ', value: 'ของขวัญ', color: '#FFD93D' },
-  { label: '🏦 ดอกเบี้ย/คืนเงิน', value: 'ดอกเบี้ย/คืนเงิน', color: '#9B51E0' },
-  { label: '📦 อื่นๆ', value: 'อื่นๆ', color: '#828282' }
-];
-
 /**
- * Creates Flex Message for selecting transaction category after slip is parsed
+ * Creates the auto-saved confirmation card shown right after a slip is parsed
+ * and recorded — zero interaction required. The single button opens the LIFF
+ * dashboard where the user can review or edit the entry.
  */
-export function createCategorySelectionFlex(data: CategorySelectionData): messagingApi.FlexMessage {
-  const isIncome = data.transactionData.type === 'income';
-  const categories = isIncome ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
+export function createAutoSavedFlex(data: AutoSavedData): messagingApi.FlexMessage {
+  const isIncome = data.type === 'income';
+  const liffUrl = config.liffId ? `https://liff.line.me/${config.liffId}` : null;
 
-  // Encode transaction details into postback data
-  const basePostback = (cat: string) =>
-    JSON.stringify({
-      action: 'select_category',
-      category: cat,
-      tx: data.transactionData
-    });
-
-  // Postback to flip the record between income and expense
-  const switchTypePostback = JSON.stringify({
-    action: 'switch_type',
-    tx: { ...data.transactionData, type: isIncome ? 'expense' : 'income' }
-  });
-
-  // Group buttons into rows of 2
-  const buttonRows: messagingApi.FlexBox[] = [];
-  for (let i = 0; i < categories.length; i += 2) {
-    const pair = categories.slice(i, i + 2);
-    const rowButtons: messagingApi.FlexComponent[] = pair.map(cat => ({
-      type: 'button',
-      action: {
-        type: 'postback',
-        label: cat.label,
-        data: basePostback(cat.value),
-        displayText: `เลือกหมวด: ${cat.label}`
-      },
-      style: 'secondary',
-      height: 'sm',
-      margin: 'xs'
-    }));
-
-    buttonRows.push({
+  const rows: messagingApi.FlexComponent[] = [
+    {
       type: 'box',
       layout: 'horizontal',
-      spacing: 'sm',
-      contents: rowButtons
-    });
-  }
+      contents: [
+        { type: 'text', text: isIncome ? 'ประเภท' : 'ร้านค้า/ผู้รับ', size: 'sm', color: '#888888', flex: 3 },
+        {
+          type: 'text',
+          text: isIncome ? '💰 รายรับ' : (data.merchant || 'ไม่ระบุ'),
+          size: 'sm',
+          color: '#111111',
+          weight: 'bold',
+          align: 'end',
+          flex: 5,
+          wrap: true
+        }
+      ]
+    },
+    {
+      type: 'box',
+      layout: 'horizontal',
+      contents: [
+        { type: 'text', text: 'หมวดหมู่', size: 'sm', color: '#888888', flex: 3 },
+        { type: 'text', text: data.category, size: 'sm', color: '#111111', weight: 'bold', align: 'end', flex: 5 }
+      ]
+    },
+    {
+      type: 'box',
+      layout: 'horizontal',
+      contents: [
+        { type: 'text', text: 'วันที่ทำรายการ', size: 'sm', color: '#888888', flex: 3 },
+        { type: 'text', text: data.date, size: 'sm', color: '#111111', align: 'end', flex: 5 }
+      ]
+    }
+  ];
+
+  const footer: messagingApi.FlexComponent[] = liffUrl
+    ? [
+        {
+          type: 'button',
+          action: { type: 'uri', label: '📊 ดูรายการทั้งหมด', uri: liffUrl },
+          style: 'primary',
+          color: '#06C755',
+          height: 'sm'
+        }
+      ]
+    : [];
 
   return {
     type: 'flex',
-    altText: `บันทึกสลิป: ฿${data.amount.toLocaleString()} - เลือกหมวดหมู่`,
+    altText: `${isIncome ? 'รายรับ' : 'บันทึก'} ฿${data.amount.toLocaleString()} · ${data.category}`,
     contents: {
       type: 'bubble',
       size: 'mega',
       header: {
         type: 'box',
         layout: 'vertical',
-        backgroundColor: '#06C755',
+        backgroundColor: isIncome ? '#0E9F6E' : '#06C755',
         paddingAll: '16px',
         contents: [
           {
             type: 'text',
-            text: isIncome ? '💰 ตรวจพบสลิปเงินเข้า' : '🧾 ตรวจพบสลิปโอนเงิน',
+            text: isIncome ? '✅ บันทึกรายรับแล้ว (อัตโนมัติ)' : '✅ บันทึกรายจ่ายแล้ว (อัตโนมัติ)',
             color: '#FFFFFF',
             weight: 'bold',
             size: 'md'
           },
           {
             type: 'text',
-            text: `฿${data.amount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            text: `${isIncome ? '+' : '−'}฿${data.amount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
             color: '#FFFFFF',
             weight: 'bold',
             size: 'xxl',
@@ -117,69 +106,12 @@ export function createCategorySelectionFlex(data: CategorySelectionData): messag
       body: {
         type: 'box',
         layout: 'vertical',
-        spacing: 'md',
-        contents: [
-          {
-            type: 'box',
-            layout: 'vertical',
-            spacing: 'xs',
-            contents: [
-              {
-                type: 'box',
-                layout: 'horizontal',
-                contents: [
-                  { type: 'text', text: 'ร้านค้า/ผู้รับ', size: 'sm', color: '#888888', flex: 3 },
-                  {
-                    type: 'text',
-                    text: data.merchant || 'ไม่ระบุ',
-                    size: 'sm',
-                    color: '#111111',
-                    weight: 'bold',
-                    align: 'end',
-                    flex: 5
-                  }
-                ]
-              },
-              {
-                type: 'box',
-                layout: 'horizontal',
-                contents: [
-                  { type: 'text', text: 'วันที่ทำรายการ', size: 'sm', color: '#888888', flex: 3 },
-                  { type: 'text', text: data.date, size: 'sm', color: '#111111', align: 'end', flex: 5 }
-                ]
-              }
-            ]
-          },
-          { type: 'separator', margin: 'md' },
-          {
-            type: 'text',
-            text: isIncome ? 'กรุณาเลือกหมวดหมู่รายรับ:' : 'กรุณาเลือกหมวดหมู่ค่าใช้จ่าย:',
-            size: 'sm',
-            color: '#555555',
-            weight: 'bold',
-            margin: 'md'
-          },
-          {
-            type: 'button',
-            action: {
-              type: 'postback',
-              label: isIncome ? '💸 เปลี่ยนเป็นรายจ่าย' : '💰 เปลี่ยนเป็นรายรับ',
-              data: switchTypePostback,
-              displayText: isIncome ? 'เปลี่ยนเป็นรายจ่าย' : 'เปลี่ยนเป็นรายรับ'
-            },
-            style: 'primary',
-            color: isIncome ? '#FF6B6B' : '#06C755',
-            height: 'sm',
-            margin: 'md'
-          },
-          {
-            type: 'box',
-            layout: 'vertical',
-            spacing: 'sm',
-            contents: buttonRows
-          }
-        ]
-      }
+        spacing: 'xs',
+        contents: rows
+      },
+      footer: footer.length
+        ? { type: 'box', layout: 'vertical', spacing: 'sm', contents: footer }
+        : undefined
     }
   };
 }
@@ -308,46 +240,6 @@ export function createSummaryFlex(data: SummaryData): messagingApi.FlexMessage {
           ...categoryContents,
           ...incomeBoxes,
           ...memberBoxes
-        ]
-      }
-    }
-  };
-}
-
-/**
- * Creates confirmation Flex Message when category is saved
- */
-export function createConfirmedFlex(category: string, amount: number, merchant?: string | null): messagingApi.FlexMessage {
-  return {
-    type: 'flex',
-    altText: `บันทึกเรียบร้อย: ${category} ฿${amount.toLocaleString()}`,
-    contents: {
-      type: 'bubble',
-      size: 'kilo',
-      body: {
-        type: 'box',
-        layout: 'vertical',
-        spacing: 'sm',
-        contents: [
-          {
-            type: 'text',
-            text: '✅ บันทึกรายการสำเร็จ',
-            color: '#06C755',
-            weight: 'bold',
-            size: 'md'
-          },
-          {
-            type: 'text',
-            text: `฿${amount.toLocaleString('th-TH', { minimumFractionDigits: 2 })}`,
-            weight: 'bold',
-            size: 'xl'
-          },
-          {
-            type: 'text',
-            text: `หมวดหมู่: ${category}${merchant ? ` (${merchant})` : ''}`,
-            size: 'sm',
-            color: '#555555'
-          }
         ]
       }
     }

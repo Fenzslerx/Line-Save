@@ -1,5 +1,18 @@
 import { getD1, checkDatabaseConnection } from '../db/client';
 import { getEventCounts, getRecentEvents, getAiUsage } from '../db/events';
+import {
+  getSlipMetrics,
+  getWebhookLatency,
+  getAiLatency,
+  getOcrStats,
+  getErrorsBySource,
+  getActiveUsers,
+  getReplyStats,
+  getSignatureFailures,
+  getPendingSlipCount,
+  getRecentAudit,
+  getAlerts
+} from '../db/metrics';
 import { config } from '../config/env';
 
 /**
@@ -32,13 +45,24 @@ export async function handleAdminApi(request: Request, url: URL): Promise<Respon
   }
 
   const db = getD1();
-  const [dbStatus, counts24h, counts7d, errors, ai24h, ai7d] = await Promise.all([
+  const [dbStatus, counts24h, counts7d, errors, ai24h, ai7d, slips, webhookLat, aiLat, ocr, errBySource, activeUsers, reply, sigFails, pendingSlips, audit, alerts] = await Promise.all([
     checkDatabaseConnection(),
     getEventCounts(db, 60 * 60 * 24),
     getEventCounts(db, 7 * 60 * 60 * 24),
     getRecentEvents(db, 30, 'error'),
     getAiUsage(db, 60 * 60 * 24),
-    getAiUsage(db, 7 * 60 * 60 * 24)
+    getAiUsage(db, 7 * 60 * 60 * 24),
+    getSlipMetrics(db),
+    getWebhookLatency(db),
+    getAiLatency(db),
+    getOcrStats(db),
+    getErrorsBySource(db),
+    getActiveUsers(db),
+    getReplyStats(db),
+    getSignatureFailures(db),
+    getPendingSlipCount(db),
+    getRecentAudit(db, 15),
+    getAlerts(db)
   ]);
 
   return Response.json({
@@ -71,6 +95,19 @@ export async function handleAdminApi(request: Request, url: URL): Promise<Respon
     counts7d,
     ai24h,
     ai7d,
-    recentErrors: errors
+    recentErrors: errors,
+    metrics: {
+      slips,
+      webhook_latency: webhookLat,
+      ai_latency: aiLat,
+      ocr,
+      errors_by_source: errBySource,
+      active_users_24h: activeUsers,
+      reply,
+      signature_failures_1h: sigFails,
+      pending_slips: pendingSlips
+    },
+    audit,
+    alerts
   });
 }

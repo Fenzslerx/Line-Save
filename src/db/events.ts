@@ -1,7 +1,7 @@
 import { D1Database } from './client';
 
 export type EventLevel = 'info' | 'warn' | 'error';
-export type EventSource = 'bot' | 'liff' | 'ai' | 'db' | 'system';
+export type EventSource = 'bot' | 'liff' | 'ai' | 'db' | 'system' | 'line';
 
 export interface SystemEventRow {
   ts: number;
@@ -9,6 +9,15 @@ export interface SystemEventRow {
   source: EventSource;
   event: string;
   detail: string | null;
+}
+
+export interface EventMeta {
+  /** Correlation ID tying every log line of one webhook event together. */
+  requestId?: string | null;
+  /** Measured duration of the call, in milliseconds. */
+  latencyMs?: number | null;
+  /** Structured JSON payload (metadata only — never full PII). */
+  data?: Record<string, unknown> | null;
 }
 
 /**
@@ -20,13 +29,23 @@ export function logEvent(
   level: EventLevel,
   source: EventSource,
   event: string,
-  detail?: string | null
+  detail?: string | null,
+  meta?: EventMeta
 ): void {
   if (!db) return;
   db.prepare(
-    'INSERT INTO system_events (ts, level, source, event, detail) VALUES (?, ?, ?, ?, ?)'
+    'INSERT INTO system_events (ts, level, source, event, detail, request_id, latency_ms, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   )
-    .bind(Math.floor(Date.now() / 1000), level, source, event, detail ?? null)
+    .bind(
+      Math.floor(Date.now() / 1000),
+      level,
+      source,
+      event,
+      detail ?? null,
+      meta?.requestId ?? null,
+      meta?.latencyMs != null ? Math.round(meta.latencyMs) : null,
+      meta?.data ? JSON.stringify(meta.data) : null
+    )
     .run()
     .catch(() => {});
 }

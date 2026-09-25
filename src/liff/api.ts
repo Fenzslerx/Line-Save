@@ -15,6 +15,7 @@ import {
 } from '../db/liff';
 import { upsertUser } from '../db/queries';
 import { logEvent } from '../db/events';
+import { audit } from '../observability/log';
 
 interface LiffUser {
   userId: string;
@@ -131,6 +132,7 @@ export async function handleLiffApi(request: Request, url: URL): Promise<Respons
         merchant: body.merchant ? String(body.merchant) : null,
         date
       });
+      audit(db, user.userId, 'create', 'transaction', null, { amount, type, category, date });
       return Response.json({ ok: true });
     }
 
@@ -145,12 +147,14 @@ export async function handleLiffApi(request: Request, url: URL): Promise<Respons
       if (body.date !== undefined && /^\d{4}-\d{2}-\d{2}$/.test(String(body.date))) fields.date = String(body.date);
 
       const ok = await updateTransaction(db, user.userId, id, fields);
+      if (ok) audit(db, user.userId, 'update', 'transaction', id, { fields: Object.keys(fields) });
       return Response.json({ ok });
     }
 
     if (method === 'DELETE' && route.startsWith('transactions/')) {
       const id = route.slice('transactions/'.length);
       await deleteTransaction(db, user.userId, id);
+      audit(db, user.userId, 'delete', 'transaction', id);
       return Response.json({ ok: true });
     }
 
@@ -159,6 +163,7 @@ export async function handleLiffApi(request: Request, url: URL): Promise<Respons
       const amount = Number(body.monthly_budget);
       if (!Number.isFinite(amount) || amount < 0) return badRequest('monthly_budget must be a number');
       await setMonthlyBudget(db, user.userId, amount);
+      audit(db, user.userId, 'set', 'budget', null, { monthly_budget: amount });
       return Response.json({ ok: true });
     }
 
@@ -176,6 +181,7 @@ export async function handleLiffApi(request: Request, url: URL): Promise<Respons
       const category = String(body.category || '').trim();
       if (!keyword || !category) return badRequest('keyword and category are required');
       await saveCategoryRule(db, keyword, category, body.type === 'income' ? 'income' : 'expense');
+      audit(db, user.userId, 'set', 'category_rule', null, { keyword, category });
       return Response.json({ ok: true });
     }
 

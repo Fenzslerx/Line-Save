@@ -148,7 +148,7 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ status: 'ok', processed: 1 });
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('[Mode: 1-on-1 Chat]'));
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('[Event] id=msg-325708'));
     logSpy.mockRestore();
   });
 
@@ -282,7 +282,8 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
       direction: 'expense', category: 'อาหารและเครื่องดื่ม', confidence: 'high'
     };
     (getD1 as jest.Mock)
-      .mockReturnValueOnce(makeMockD1([])) // first call: auto-record user
+      .mockReturnValueOnce(makeMockD1([])) // first call: request log handle
+      .mockReturnValueOnce(makeMockD1([])) // second call: auto-record user
       .mockReturnValueOnce(makeMockD1([{ result_json: JSON.stringify(cached) }])); // msg dedup lookup finds it
 
     const repliesBefore = (replyLineMessage as jest.Mock).mock.calls.length;
@@ -306,7 +307,8 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
       direction: 'expense', category: 'ของใช้ทั่วไป', confidence: 'high'
     };
     (getD1 as jest.Mock)
-      .mockReturnValueOnce(makeMockD1([])) // first call: auto-record user
+      .mockReturnValueOnce(makeMockD1([])) // first call: request log handle
+      .mockReturnValueOnce(makeMockD1([])) // second call: auto-record user
       .mockReturnValueOnce(
         makeMockD1([], { 'img:': [{ result_json: JSON.stringify(cached) }] }) // msg dedup misses, image cache hits
       );
@@ -332,8 +334,9 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
       { category: 'เงินเดือน', type: 'income', total_amount: 900, transaction_count: 1 }
     ]);
     (getD1 as jest.Mock)
-      .mockReturnValueOnce(customD1) // first call: auto-record user
-      .mockReturnValueOnce(customD1); // second call: summary command
+      .mockReturnValueOnce(customD1) // first call: request log handle
+      .mockReturnValueOnce(customD1) // second call: auto-record user
+      .mockReturnValueOnce(customD1); // third call: summary command
 
     const summaryPayload = {
       destination: 'U1234567890abcdef',

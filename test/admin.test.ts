@@ -13,6 +13,20 @@ jest.mock('../src/db/events', () => ({
   getAiUsage: jest.fn().mockResolvedValue([])
 }));
 
+jest.mock('../src/db/metrics', () => ({
+  getSlipMetrics: jest.fn().mockResolvedValue({ total: 0, success: 0, failed: 0, ignored: 0, stuck: 0 }),
+  getWebhookLatency: jest.fn().mockResolvedValue({ p50: null, p95: null, samples: 0 }),
+  getAiLatency: jest.fn().mockResolvedValue({ p50: null, p95: null, samples: 0 }),
+  getOcrStats: jest.fn().mockResolvedValue({ ok: 0, fail: 0, failRate: 0, failRate1h: 0 }),
+  getErrorsBySource: jest.fn().mockResolvedValue([]),
+  getActiveUsers: jest.fn().mockResolvedValue(0),
+  getReplyStats: jest.fn().mockResolvedValue({ ok: 0, fail: 0, successRate: 1 }),
+  getSignatureFailures: jest.fn().mockResolvedValue(0),
+  getPendingSlipCount: jest.fn().mockResolvedValue(0),
+  getRecentAudit: jest.fn().mockResolvedValue([]),
+  getAlerts: jest.fn().mockResolvedValue([])
+}));
+
 function makeUrl(key?: string): URL {
   const u = new URL('https://x.test/api/admin/overview');
   if (key) u.searchParams.set('key', key);
@@ -41,6 +55,9 @@ describe('Admin API', () => {
     expect(body.services.ai.provider).toContain('Gemini');
     expect(body.counts24h.error).toBe(0);
     expect(Array.isArray(body.recentErrors)).toBe(true);
+    expect(body.metrics.slips).toBeDefined();
+    expect(Array.isArray(body.alerts)).toBe(true);
+    expect(Array.isArray(body.audit)).toBe(true);
 
     const viaHeader = await handleAdminApi(
       new Request('https://x.test/api/admin/overview', { headers: { 'x-admin-key': 'secret-admin-key-123' } }),

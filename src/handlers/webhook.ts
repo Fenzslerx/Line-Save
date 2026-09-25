@@ -16,6 +16,15 @@ import {
 import { findCategoryRule } from '../db/liff';
 import { logEvent } from '../db/events';
 import {
+  hashUserId,
+  newRequestId,
+  startRequest,
+  finishRequest,
+  setSlipStage,
+  logStage,
+  cleanupOldSlipTracking
+} from '../observability/log';
+import {
   createAutoSavedFlex,
   createSummaryFlex
 } from '../templates/flex';
@@ -81,6 +90,11 @@ export async function webhookHandler(req: Request, res: Response): Promise<void>
 
   if (!signature || !verifySignature(rawBody, signature)) {
     console.warn('[Webhook] Invalid or missing signature');
+    try {
+      logEvent(getD1(), 'warn', 'system', 'signature_invalid', 'express: invalid or missing x-line-signature');
+    } catch {
+      /* DB not bound — skip */
+    }
     res.status(401).json({ error: 'Invalid signature' });
     return;
   }
@@ -99,65 +113,101 @@ export async function webhookHandler(req: Request, res: Response): Promise<void>
 }
 
 /**
- * Process a single LINE webhook event
+ * Process a single LINE webhook event.
+ * Every event gets a correlation ID (requestId) shared by its request_logs
+ * row, its pending_slips checkpoint and every system_events line it emits.
  */
 export async function processWebhookEvent(event: any): Promise<void> {
   const sourceType = event.source?.type;
   const userId = event.source?.userId;
   const groupId = event.source?.groupId || event.source?.roomId || null;
+  const requestId = newRequestId(event);
+  const eventType = `message.${event.message?.type || 'unknown'}`;
+  const t0 = Date.now();
 
-  console.log(`[Event] type: ${event.type}, source: ${sourceType}, userId: ${userId}, groupId: ${groupId}`);
-
-  if (sourceType === 'user') {
-    console.log(`[Mode: 1-on-1 Chat] Handling event for direct user: ${userId}`);
-  } else if (sourceType === 'group' || sourceType === 'room') {
-    console.log(`[Mode: Group/Room] Handling event in group: ${groupId} from user: ${userId}`);
+  // Try to bind the DB, but never let observability break processing
+  let db: ReturnType<typeof getD1> | null = null;
+  try {
+    db = getD1();
+  } catch {
+    db = null;
   }
 
-  // Auto-record user if userId is present
-  if (userId) {
-    try {
-      const db = getD1();
-      await upsertUser(db, { line_user_id: userId });
-      if (groupId) {
-        await upsertGroup(db, { line_group_id: groupId });
+  const source = sourceType === 'user' ? `user:${hashUserId(userId)}` : sourceType;
+  console.log(`[Event] id=${requestId} type: ${event.type}, source: ${source}, groupId: ${groupId}`);
+
+  startRequest(db, {
+    requestId,
+    eventType: event.type === 'message' ? eventType : event.type,
+    messageId: event.message?.id,
+    userId,
+    groupId
+  });
+
+  try {
+    // Auto-record user if userId is present
+    if (userId) {
+      try {
+        const db2 = getD1();
+        await upsertUser(db2, { line_user_id: userId });
+        if (groupId) {
+          await upsertGroup(db2, { line_group_id: groupId });
+        }
+      } catch (e) {
+        console.warn('[DB Auto-record] Failed to record user/group:', e);
       }
-    } catch (e) {
-      console.warn('[DB Auto-record] Failed to record user/group:', e);
     }
-  }
 
-  // 1. Handle incoming messages
-  if (event.type === 'message') {
-    const message = event.message;
+    // 1. Handle incoming messages
+    if (event.type === 'message') {
+      const message = event.message;
 
-    // Image message -> Check slip with Vision LLM
-    if (message.type === 'image') {
-      await handleImageMessage(event, userId, groupId);
+      // Image message -> Check slip with Vision LLM
+      if (message.type === 'image') {
+        await handleImageMessage(event, userId, groupId, requestId, t0);
+      }
+      // Text message -> Commands (สรุป, ตั้งชื่อ)
+      else if (message.type === 'text') {
+        await handleTextMessage(event, userId, groupId, requestId);
+      }
     }
-    // Text message -> Commands (สรุป, ตั้งชื่อ)
-    else if (message.type === 'text') {
-      await handleTextMessage(event, userId, groupId);
+    // 2. Handle Postback — kept as a no-op: the bot now auto-saves slips, so no
+    // interactive postback cards are sent anymore (legacy clients may still send events).
+    else if (event.type === 'postback') {
+      finishRequest(db, requestId, 'ignored', Date.now() - t0);
+      return;
     }
-  }
-  // 2. Handle Postback — kept as a no-op: the bot now auto-saves slips, so no
-  // interactive postback cards are sent anymore (legacy clients may still send events).
-  else if (event.type === 'postback') {
-    // nothing to do
+
+    finishRequest(db, requestId, 'success', Date.now() - t0);
+    cleanupOldSlipTracking(db);
+  } catch (err: any) {
+    finishRequest(db, requestId, 'failed', Date.now() - t0, err?.message || String(err));
+    throw err;
   }
 }
 
 /**
- * Handles incoming slip images
+ * Handles incoming slip images — the pipeline is
+ * received → downloading → extracting → extracted → saving → saved → replied,
+ * each step checkpointed in pending_slips and logged under one requestId.
  */
-async function handleImageMessage(event: any, userId: string, groupId: string | null) {
+async function handleImageMessage(
+  event: any,
+  userId: string,
+  groupId: string | null,
+  requestId: string,
+  requestStart: number
+) {
   const messageId = event.message.id;
   const replyToken = event.replyToken;
+
+  const markStage = (stage: 'received' | 'downloading' | 'extracting' | 'extracted' | 'saving' | 'saved' | 'replied' | 'not_slip') =>
+    setSlipStage(db, messageId, stage, 'pending', userId);
 
   // Multiple slips sent in a burst each arrive as their own event and are
   // processed in parallel (see webhookHandler). LINE may also redeliver a
   // message if the webhook response is slow — skip anything already handled.
-  let db;
+  let db: ReturnType<typeof getD1> | null = null;
   try {
     db = getD1();
   } catch {
@@ -168,18 +218,22 @@ async function handleImageMessage(event: any, userId: string, groupId: string | 
     const seen = await getCachedExtraction(db, `msg:${messageId}`).catch(() => null);
     if (seen) {
       console.log(`[Slip Detection] Message ${messageId} already processed. Skipping duplicate.`);
+      finishRequest(db, requestId, 'ignored', Date.now() - requestStart, 'duplicate');
       return;
     }
   }
 
+  markStage('received');
   const targetChatId = groupId || userId;
   if (targetChatId) {
     await showLoadingAnimation(targetChatId, 20); // max 20 seconds loading animation
   }
 
-  console.log(`[Slip Detection] Downloading image for message: ${messageId}`);
+  console.log(`[Slip Detection] [${requestId}] Downloading image for message: ${messageId}`);
+  markStage('downloading');
   const imageBuffer = await downloadMessageImage(messageId);
 
+  markStage('extracting');
   // Identical slip images resolve instantly from cache instead of calling the LLM again
   const imageHash = `img:${crypto.createHash('sha256').update(imageBuffer).digest('hex')}`;
   let extraction = db ? await getCachedExtraction(db, imageHash).catch(() => null) : null;
@@ -190,9 +244,23 @@ async function handleImageMessage(event: any, userId: string, groupId: string | 
     try {
       const t0 = Date.now();
       extraction = await extractSlipInfo(imageBuffer);
-      logEvent(db, 'info', 'ai', 'gemini_call_ok', `model=${config.gemini.model} latency=${Date.now() - t0}ms is_slip=${extraction.is_slip}`);
+      // Metadata only — never log merchant names / account details (PDPA)
+      logEvent(db, 'info', 'ai', 'gemini_call_ok', null, {
+        requestId,
+        latencyMs: Date.now() - t0,
+        data: {
+          model: config.gemini.model,
+          is_slip: extraction.is_slip,
+          direction: extraction.direction,
+          confidence: extraction.confidence,
+          has_amount: extraction.amount !== null,
+          has_date: extraction.date !== null,
+          has_merchant: extraction.merchant !== null,
+          ocr_assisted: Boolean(config.typhoon.apiKey)
+        }
+      });
     } catch (err: any) {
-      logEvent(db, 'error', 'ai', 'gemini_call_fail', String(err?.message || err));
+      logEvent(db, 'error', 'ai', 'gemini_call_fail', String(err?.message || err).slice(0, 300), { requestId });
       throw err;
     }
     if (db && extraction.is_slip) {
@@ -205,10 +273,13 @@ async function handleImageMessage(event: any, userId: string, groupId: string | 
     await saveExtractionCache(db, `msg:${messageId}`, extraction).catch(() => {});
   }
 
+  markStage('extracted');
   console.log('[Slip Detection] Vision Result:', extraction);
   // If not a slip, stay completely silent (especially in groups)
   if (!extraction.is_slip || extraction.amount === null) {
-    logEvent(db, 'info', 'bot', 'image_not_slip', `msg=${messageId}`);
+    setSlipStage(db, messageId, 'not_slip', 'done', userId);
+    logStage(db, requestId, 'not_slip', { confidence: extraction.confidence });
+    finishRequest(db, requestId, 'ignored', Date.now() - requestStart, 'not_slip');
     console.log('[Slip Detection] Image is not a recognized slip. Staying silent.');
     return;
   }
@@ -227,6 +298,7 @@ async function handleImageMessage(event: any, userId: string, groupId: string | 
   if (!category) category = normalizeCategory(extraction.category, txType);
 
   // Auto-save immediately — no category picker, no user interaction required
+  markStage('saving');
   await createTransaction(saveDb, {
     line_user_id: userId,
     line_group_id: groupId,
@@ -236,8 +308,15 @@ async function handleImageMessage(event: any, userId: string, groupId: string | 
     merchant: extraction.merchant,
     date: txDate
   });
+  setSlipStage(db, messageId, 'saved', 'done', userId);
   console.log(`[Slip Detection] Auto-saved: ${txType} ฿${extraction.amount} [${category}]`);
-  logEvent(db, 'info', 'bot', 'slip_saved', `${txType} ฿${extraction.amount} [${category}] by ${userId}${groupId ? ` in ${groupId}` : ''}`);
+  logStage(db, requestId, 'slip_saved', {
+    type: txType,
+    amount: extraction.amount,
+    category,
+    confidence: extraction.confidence
+  });
+  logEvent(db, 'info', 'bot', 'slip_saved', `${txType} ฿${extraction.amount} [${category}] user=${hashUserId(userId)}${groupId ? ` in ${groupId}` : ''}`);
 
   const flexMessage = createAutoSavedFlex({
     amount: extraction.amount,
@@ -247,13 +326,28 @@ async function handleImageMessage(event: any, userId: string, groupId: string | 
     category
   });
 
-  await replyLineMessage(replyToken, [flexMessage]);
+  try {
+    await replyLineMessage(replyToken, [flexMessage]);
+    setSlipStage(db, messageId, 'replied', 'done', userId);
+    logStage(db, requestId, 'replied');
+  } catch (err: any) {
+    // reply_ok/reply_fail are logged by the LINE service itself; the slip is
+    // already saved, so mark the checkpoint done but flag the outcome
+    setSlipStage(db, messageId, 'replied', 'done', userId);
+    finishRequest(db, requestId, 'failed', Date.now() - requestStart, `reply_failed: ${err?.message || err}`);
+    throw err;
+  }
 }
 
 /**
  * Handles text commands like "สรุป" and "ชื่อ [ชื่อเล่น]"
  */
-async function handleTextMessage(event: any, userId: string, groupId: string | null) {
+async function handleTextMessage(
+  event: any,
+  userId: string,
+  groupId: string | null,
+  requestId: string
+) {
   const text = (event.message.text || '').trim();
   const replyToken = event.replyToken;
 

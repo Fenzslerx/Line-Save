@@ -1,4 +1,4 @@
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai';
 import { config } from '../config/env';
 import { ocrImage } from './typhoon';
 import { getD1 } from '../db/client';
@@ -39,7 +39,7 @@ export function getGeminiClient(): GoogleGenAI {
 
 const SYSTEM_PROMPT = `You are an expert AI specializing in analyzing payment slips, bank transfer slips, and merchant receipts, primarily for Thai financial institutions (e.g. KBank, SCB, KTB, BBL, Krungsri, PromptPay, TrueMoney).
 
-Your job is to examine the provided image and extract information into a strictly formatted JSON object:
+Your job is to examine the provided slip (as OCR text, an image, or both) and extract information into a strictly formatted JSON object:
 {
   "is_slip": boolean,
   "amount": number | null,
@@ -52,15 +52,15 @@ Your job is to examine the provided image and extract information into a strictl
 
 Rules:
 1. "is_slip":
-   - Set to true ONLY if the image is a valid bank transfer slip, payment confirmation, or purchase receipt.
-   - Set to false if the image is anything else (e.g. memes, cat/dog photos, landscapes, selfies, arbitrary text/screenshots).
+   - Set to true ONLY if the input is a valid bank transfer slip, payment confirmation, or purchase receipt.
+   - Set to false if it is anything else (e.g. memes, cat/dog photos, landscapes, selfies, arbitrary text/screenshots).
 2. "amount":
    - The final transferred or paid amount in Thai Baht (numeric float/integer, no commas or currency symbols).
    - If not found or not a slip, set to null.
 3. "date":
    - The transaction date formatted as "YYYY-MM-DD".
    - Note: Thai slips often use Buddhist Era (พ.ศ.), e.g., 2567 -> 2024, 2568 -> 2025. Convert any Buddhist year to Gregorian year (AD = BE - 543).
-   - If the date cannot be determined, set to null.
+   - The date must never be in the future. If the date cannot be determined, set to null.
 4. "merchant":
    - The recipient name, store name, or merchant name (e.g. "นายสมชาย", "7-Eleven", "GrabFood").
    - If unclear or not found, set to null.
@@ -70,7 +70,7 @@ Rules:
    - "income": money coming IN — receive/credit screens where the account holder is the RECIPIENT (คำที่พบบ่อย: "เงินเข้า", "รับเงิน/รับโอน", "เครดิต", หน้าจอ PromptPay ที่แสดงว่าเป็นผู้รับเงิน).
    - Direction of the arrow matters: FROM someone TO the account holder = "income"; FROM the account holder TO someone = "expense".
    - A merchant payment receipt (ใบเสร็จ/สลิปร้านค้า) is always "expense".
-   - Set null ONLY when the image genuinely makes it impossible to tell.
+   - Set null ONLY when the input genuinely makes it impossible to tell.
 6. "category":
    - Classify the transaction into EXACTLY ONE of these category names (verbatim Thai):
    - For "expense": "อาหารและเครื่องดื่ม" (food/drink/restaurant/cafe/groceries), "การเดินทาง" (fuel/toll/parking/taxi/bus/train/delivery fee), "ของใช้ทั่วไป" (household/personal items/clothes/medicine), "บิลและสาธารณูปโภค" (utility bills/phone/internet/insurance/rent), "อื่นๆ" (anything else).
@@ -78,10 +78,84 @@ Rules:
    - Use hints from the merchant name and slip type; when truly ambiguous use "อื่นๆ".
    - If not a slip, set to null.
 7. "confidence":
-   - "high": Clear slip, sharp image, all fields unambiguous.
-   - "medium": Readable but some fields slightly unclear or blurry.
-   - "low": Image is very blurry, corrupted, partially cropped, or is not a slip.
-7. Output MUST be ONLY valid raw JSON without markdown code fences (\`\`\`json) and no conversational text.`;
+   - "high": Clear slip, all fields unambiguous.
+   - "medium": Some fields slightly unclear.
+   - "low": Input is very unclear, partially cropped, or is not a slip.
+
+Examples:
+Input OCR: "รับโอนพร้อมเพย์ จำนวนเงิน 350.00 บาท วันที่ 15 มิ.ย. 2568 รับจาก นายสมชาย"
+Output: {"is_slip": true, "amount": 350, "date": "2025-06-15", "merchant": "นายสมชาย", "direction": "income", "category": "รายรับทั่วไป", "confidence": "high"}
+Input OCR: "ร้านข้าวแกงคุณหนู ยอดรวม 129.00 บาท 20/09/2568"
+Output: {"is_slip": true, "amount": 129, "date": "2025-09-20", "merchant": "ร้านข้าวแกงคุณหนู", "direction": "expense", "category": "อาหารและเครื่องดื่ม", "confidence": "high"}
+Input OCR: "แมวส้มอ้วน น่ารักมาก" (from a meme photo)
+Output: {"is_slip": false, "amount": null, "date": null, "merchant": null, "direction": null, "category": null, "confidence": "low"}
+
+8. Output MUST be ONLY valid raw JSON without markdown code fences (\`\`\`json) and no conversational text.`;
+
+/**
+ * Structured-output contract. With responseSchema the API guarantees the exact
+ * JSON shape, eliminating malformed-output retries.
+ */
+const SLIP_RESPONSE_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    is_slip: { type: Type.BOOLEAN },
+    amount: { type: Type.NUMBER, nullable: true },
+    date: { type: Type.STRING, nullable: true },
+    merchant: { type: Type.STRING, nullable: true },
+    direction: { type: Type.STRING, enum: ['income', 'expense'], nullable: true },
+    category: { type: Type.STRING, nullable: true },
+    confidence: { type: Type.STRING, enum: ['high', 'medium', 'low'] }
+  },
+  required: ['is_slip', 'amount', 'date', 'merchant', 'direction', 'category', 'confidence'],
+  propertyOrdering: ['is_slip', 'amount', 'date', 'merchant', 'direction', 'category', 'confidence']
+};
+
+/**
+ * Numbers sitting next to a currency marker (บาท/THB/฿) are the most
+ * trustworthy amount on a Thai slip.
+ */
+function bahtMarkedAmounts(text: string): number[] {
+  const amounts: number[] = [];
+  const re = /(?:฿\s*(\d[\d,]*(?:\.\d{1,2})?))|((\d[\d,]*(?:\.\d{1,2})?)\s*(?:บาท|THB))/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const raw = m[1] ?? m[2];
+    if (raw) amounts.push(parseFloat(raw.replace(/,/g, '')));
+  }
+  return amounts;
+}
+
+/**
+ * Post-validation against the OCR text: corrects hallucinated amounts and
+ * rejects future dates. Mutates `result` in place.
+ */
+function postValidate(result: SlipExtractionResult, ocrText: string | null): void {
+  if (result.is_slip && result.amount !== null && ocrText) {
+    const bahts = bahtMarkedAmounts(ocrText);
+    const llmAmount = result.amount;
+    if (bahts.length > 0 && !bahts.some(a => Math.abs(a - llmAmount) < 0.005)) {
+      const unique = [...new Set(bahts)];
+      if (unique.length === 1) {
+        // Exactly one baht-marked number on the slip — trust the OCR over the LLM
+        result.amount = unique[0];
+        tryLog('warn', 'amount_crosscheck_fix', `llm=${llmAmount} ocr=${unique[0]}`);
+      } else {
+        // Multiple candidates and none match — keep the LLM value but flag it
+        result.confidence = 'low';
+        tryLog('warn', 'amount_crosscheck_mismatch', `llm=${llmAmount} ocr=${unique.join('|')}`);
+      }
+    }
+  }
+  if (result.date) {
+    const ts = new Date(`${result.date}T00:00:00Z`).getTime();
+    // 2 days of slack covers the Bangkok (UTC+7) day boundary
+    if (isNaN(ts) || ts > Date.now() + 2 * 24 * 60 * 60 * 1000) {
+      tryLog('warn', 'future_date_rejected', result.date);
+      result.date = null;
+    }
+  }
+}
 
 /**
  * Extracts payment details from an image buffer using Google Gemini Vision
@@ -102,11 +176,10 @@ export async function extractSlipInfo(
   };
 
   const client = clientOverride || getGeminiClient();
-  const base64Data = imageBuffer.toString('base64');
   const model = config.gemini.model;
 
   // Stage 1 (optional): Typhoon OCR reads the slip text — fast and Thai-accurate.
-  // Its output is passed to Gemini alongside the image for more reliable parsing.
+  // Its output is passed to Gemini for structuring into JSON.
   let ocrText: string | null = null;
   if (config.typhoon.apiKey) {
     const t0 = Date.now();
@@ -119,31 +192,48 @@ export async function extractSlipInfo(
     }
   }
 
+  // When OCR succeeded we structure TEXT ONLY — no image upload, several
+  // seconds faster per slip. The image goes to Gemini only when OCR failed.
   const userPrompt = ocrText
-    ? `Analyze this payment slip. OCR text extracted from the image:\n"""\n${ocrText}\n"""\nUse the OCR text as the primary source and the image to resolve ambiguity. Output the transaction details as JSON.`
+    ? `Analyze this payment slip using ONLY the OCR text extracted from the image (the image itself is not attached):\n"""\n${ocrText}\n"""\nIf the text clearly does not come from a payment slip or receipt, set is_slip=false. Output the transaction details as JSON.`
     : 'Analyze this image and output the transaction details as JSON.';
+
+  const parts: any[] = ocrText
+    ? [{ text: userPrompt }]
+    : [
+        { inlineData: { mimeType: mimeType, data: imageBuffer.toString('base64') } },
+        { text: userPrompt }
+      ];
 
   const MAX_RETRIES = 3;
   let lastError: any;
+  // thinkingBudget 0 disables thinking — much faster for straight extraction.
+  // Negative values mean "leave the model default" and skip the config entirely.
+  let applyThinking = config.gemini.thinkingBudget >= 0;
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
+      const requestConfig: any = {
+        systemInstruction: SYSTEM_PROMPT,
+        responseMimeType: 'application/json',
+        responseSchema: SLIP_RESPONSE_SCHEMA,
+        temperature: 0,
+        maxOutputTokens: 1024,
+        abortSignal: AbortSignal.timeout(15_000)
+      };
+      if (applyThinking) {
+        requestConfig.thinkingConfig = { thinkingBudget: config.gemini.thinkingBudget };
+      }
+
       const response = await client.models.generateContent({
         model: model,
         contents: [
           {
             role: 'user',
-            parts: [
-              { inlineData: { mimeType: mimeType, data: base64Data } },
-              { text: userPrompt }
-            ]
+            parts
           }
         ],
-        config: {
-          systemInstruction: SYSTEM_PROMPT,
-          responseMimeType: 'application/json',
-          maxOutputTokens: 1024
-        }
+        config: requestConfig
       });
 
       let textContent = response.text || '';
@@ -153,7 +243,7 @@ export async function extractSlipInfo(
       textContent = textContent.trim().replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '').trim();
 
       const parsed = JSON.parse(textContent);
-      return {
+      const result: SlipExtractionResult = {
         is_slip: Boolean(parsed.is_slip),
         amount: typeof parsed.amount === 'number' ? parsed.amount : (parsed.amount ? parseFloat(parsed.amount) : null),
         date: typeof parsed.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date) ? parsed.date : null,
@@ -162,8 +252,18 @@ export async function extractSlipInfo(
         category: parsed.category && typeof parsed.category === 'string' ? parsed.category.trim() : null,
         confidence: ['high', 'medium', 'low'].includes(parsed.confidence) ? parsed.confidence : 'low'
       };
+
+      postValidate(result, ocrText);
+      return result;
     } catch (error: any) {
       lastError = error;
+      // Models without thinking support reject the config — drop it and retry
+      // without consuming an attempt
+      if (applyThinking && error?.status === 400 && /thinking/i.test(String(error?.message || ''))) {
+        applyThinking = false;
+        attempt--;
+        continue;
+      }
       // Retry on 5xx, rate limits, or JSON parsing errors (SyntaxError)
       const isRetryable = error?.status === 503 || error?.status === 500 || error?.status === 429 || error instanceof SyntaxError;
       if (isRetryable && attempt < MAX_RETRIES) {

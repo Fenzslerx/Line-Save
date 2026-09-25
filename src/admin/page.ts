@@ -42,6 +42,8 @@ td { padding:7px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
 tr:last-child td { border-bottom:none; }
 .lvl { font-size:10px; font-weight:800; border-radius:5px; padding:2px 7px; color:#fff; }
 .lvl.error { background:var(--red); }
+.lvl.lvl-warn { background:var(--amber); }
+.lvl.audit { background:var(--ink); }
 .tag { font-size:10px; background:var(--chip); border-radius:5px; padding:2px 7px; font-weight:650; }
 .time { color:var(--muted); font-size:11px; white-space:nowrap; }
 .detail { color:var(--muted); font-size:11.5px; max-width:320px; overflow-wrap:anywhere; }
@@ -99,8 +101,57 @@ async function load() {
   $('gen').innerHTML = 'อัปเดต ' + new Date(d.generated_at).toLocaleTimeString('th-TH') + ' · <a href="#" onclick="logout()">ออกจากระบบ</a>';
 
   const s = d.services;
+  const m = d.metrics || {};
   const aiLast = d.ai24h.length ? Math.max(...d.ai24h.map(x => x.last_ts)) : null;
+
+  const alertBanner = (d.alerts && d.alerts.length)
+    ? '<h2>การแจ้งเตือน</h2>' + d.alerts.map(a =>
+        '<div class="card" style="border-color:' + (a.level === 'critical' ? 'var(--red)' : 'var(--amber)') + ';display:flex;gap:9px;align-items:baseline">' +
+        '<span class="lvl ' + (a.level === 'critical' ? 'error' : 'lvl-warn') + '">' + (a.level === 'critical' ? 'CRITICAL' : 'WARNING') + '</span>' +
+        '<span style="font-weight:700;font-size:13.5px">' + esc(a.name) + '</span>' +
+        '<span class="detail">' + esc(a.detail) + '</span></div>'
+      ).join('')
+    : '';
+
+  const fmtMs = v => (v == null ? '—' : v >= 1000 ? (v / 1000).toFixed(1) + ' s' : v + ' ms');
+  const pct = (v, okBelow) => {
+    const cls = v > okBelow ? ' style="color:var(--red);font-weight:800"' : '';
+    return '<span' + cls + '>' + Math.round(v * 100) + '%</span>';
+  };
+  const pctGood = (v, okAbove) => {
+    const cls = v < okAbove ? ' style="color:var(--red);font-weight:800"' : '';
+    return '<span' + cls + '>' + Math.round(v * 100) + '%</span>';
+  };
+  const metricsHtml =
+    '<h2>เมตริก (24 ชม.)</h2>' +
+    '<div class="card">' +
+      '<div class="kv"><span>สลิปที่ประมวลผล</span><b>' + fmtN(m.slips?.total || 0) + ' <span class="mut">(สำเร็จ ' + fmtN(m.slips?.success || 0) + ' · ผิดพลาด ' + fmtN(m.slips?.failed || 0) + ' · ไม่ใช่สลิป ' + fmtN(m.slips?.ignored || 0) + ')</span></b></div>' +
+      '<div class="kv"><span>อัตราประมวลผลล้มเหลว <span class="mut">(สลิปที่พังกลางทาง)</span></span><b>' + pct((m.slips?.failed || 0) / Math.max(1, m.slips?.total || 0), 0.1) + '</b></div>' +
+      '<div class="kv"><span>OCR fail rate <span class="mut">(7 วัน · 1 ชม. ' + pct(m.ocr?.failRate1h || 0, 0.2) + ')</span></span><b>' + pct(m.ocr?.failRate || 0, 0.2) + '</b></div>' +
+      '<div class="kv"><span>Webhook latency p50 / p95</span><b>' + fmtMs(m.webhook_latency?.p50) + ' / ' + fmtMs(m.webhook_latency?.p95) + ' <span class="mut">(n=' + fmtN(m.webhook_latency?.samples || 0) + ')</span></b></div>' +
+      '<div class="kv"><span>Gemini latency p50 / p95</span><b>' + fmtMs(m.ai_latency?.p50) + ' / ' + fmtMs(m.ai_latency?.p95) + ' <span class="mut">(n=' + fmtN(m.ai_latency?.samples || 0) + ')</span></b></div>' +
+      '<div class="kv"><span>Active users</span><b>' + fmtN(m.active_users_24h || 0) + '</b></div>' +
+      '<div class="kv"><span>LINE reply success rate</span><b>' + pctGood(m.reply?.successRate ?? 1, 0.95) + ' <span class="mut">(' + fmtN(m.reply?.ok || 0) + ' ok / ' + fmtN(m.reply?.fail || 0) + ' fail)</span></b></div>' +
+      '<div class="kv"><span>สลิปค้างใน pipeline</span><b>' + (m.pending_slips > 0 ? '<span style="color:var(--red);font-weight:800">' + fmtN(m.pending_slips) + '</span>' : '0') + '</b></div>' +
+      '<div class="kv"><span>Signature ผิดพลาด (1 ชม.)</span><b>' + (m.signature_failures_1h >= 5 ? '<span style="color:var(--red);font-weight:800">' + fmtN(m.signature_failures_1h) + '</span>' : fmtN(m.signature_failures_1h || 0)) + '</b></div>' +
+      '<div class="kv"><span>Error แยกตามที่มา <span class="mut">(24 ชม.)</span></span><b>' +
+        ((m.errors_by_source || []).length ? (m.errors_by_source || []).map(x => esc(x.source) + ': ' + fmtN(x.count)).join(' · ') : '<span class="mut">ไม่มี</span>') +
+      '</b></div>' +
+    '</div>';
+
+  const auditHtml =
+    '<h2>Audit log (15 รายการล่าสุด)</h2>' +
+    '<div class="card">' +
+      ((d.audit || []).length === 0 ? '<div class="empty">ยังไม่มีการแก้ไขข้อมูล</div>' :
+        '<table><tr><th>เวลา</th><th>ผู้ใช้</th><th>รายการ</th></tr>' +
+        d.audit.map(e =>
+          '<tr><td class="time">' + fmtT(e.ts) + '</td><td><span class="tag">' + esc(e.actor.slice(0, 8)) + '…</span> <span class="lvl audit">' + esc(e.action) + '</span></td>' +
+          '<td class="detail">' + esc(e.entity) + (e.entity_id ? ' #' + esc(e.entity_id) : '') + (e.detail ? ' — ' + esc(e.detail) : '') + '</td></tr>'
+        ).join('') + '</table>') +
+    '</div>';
+
   const html =
+    alertBanner +
     '<h2>สถานะระบบ</h2>' +
     '<div class="card">' +
       '<div class="status">' + dot(s.database.ok) + '<span class="nm">ฐานข้อมูล (D1)</span><span class="dt">' + esc(s.database.message) + '</span></div>' +
@@ -112,6 +163,8 @@ async function load() {
       '<div class="status">' + dot(s.liff.id_configured) + '<span class="nm">LIFF</span><span class="dt">' +
         (s.liff.id_configured ? 'ตั้งค่าแล้ว' : '⚠️ ยังไม่มี LIFF_ID') + '</span></div>' +
     '</div>' +
+
+    metricsHtml +
 
     '<h2>เหตุการณ์ 24 ชม. / 7 วัน</h2>' +
     '<div class="grid" style="margin-bottom:4px">' +
@@ -128,6 +181,8 @@ async function load() {
         ).join('')) +
       '<div class="kv"><span class="mut">โมเดล</span><b>' + esc(s.ai.model) + '</b></div>' +
     '</div>' +
+
+    auditHtml +
 
     '<h2>Error ล่าสุด (30 รายการ)</h2>' +
     '<div class="card">' +

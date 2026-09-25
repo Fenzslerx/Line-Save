@@ -99,6 +99,7 @@ export default {
 
       if (!(await verifyLineSignature(rawBody, signature, config.line.channelSecret))) {
         console.warn('[Webhook] Invalid or missing signature');
+        logEvent(env.DB, 'warn', 'system', 'signature_invalid', 'worker: invalid or missing x-line-signature');
         return Response.json({ error: 'Invalid signature' }, { status: 401 });
       }
 

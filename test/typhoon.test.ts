@@ -6,7 +6,7 @@ const dummyBuffer = Buffer.from('fake_image_bytes');
 describe('Typhoon OCR Service', () => {
   beforeAll(() => {
     config.typhoon.apiKey = 'test_typhoon_key';
-    config.typhoon.model = 'typhoon-ocr-7b';
+    config.typhoon.model = 'typhoon-ocr-v1.5';
   });
 
   it('should throw when the API key is missing', async () => {
@@ -28,7 +28,7 @@ describe('Typhoon OCR Service', () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe('https://api.opentyphoon.ai/v1/chat/completions');
     const body = JSON.parse(init.body);
-    expect(body.model).toBe('typhoon-ocr-7b');
+    expect(body.model).toBe('typhoon-ocr-v1.5');
     expect(body.temperature).toBe(0);
     expect(body.messages[0].content[0].type).toBe('image_url');
     expect(body.messages[0].content[0].image_url.url).toContain('data:image/jpeg;base64,');

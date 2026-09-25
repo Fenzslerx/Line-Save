@@ -16,7 +16,7 @@ export const config = {
   adminKey: process.env.ADMIN_KEY || '',
   typhoon: {
     apiKey: process.env.TYPHOON_API_KEY || '',
-    model: process.env.TYPHOON_MODEL || 'typhoon-ocr-7b'
+    model: process.env.TYPHOON_MODEL || 'typhoon-ocr-v1.5'
   }
 };
 
@@ -33,7 +33,7 @@ export function initConfig(env: Record<string, string | undefined>) {
   config.liffId = env.LIFF_ID || '';
   config.adminKey = env.ADMIN_KEY || '';
   config.typhoon.apiKey = env.TYPHOON_API_KEY || '';
-  config.typhoon.model = env.TYPHOON_MODEL || process.env.TYPHOON_MODEL || 'typhoon-ocr-7b';
+  config.typhoon.model = env.TYPHOON_MODEL || process.env.TYPHOON_MODEL || 'typhoon-ocr-v1.5';
 }
 
 export function validateConfig() {

@@ -48,7 +48,9 @@ export async function ocrImage(
         }
       ]
     }),
-    signal: AbortSignal.timeout(20_000)
+    // Short timeout: OCR is a latency optimization — if it is slow it defeats
+    // its own purpose, and Gemini can still read the image directly.
+    signal: AbortSignal.timeout(9_000)
   });
 
   if (!res.ok) {

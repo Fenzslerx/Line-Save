@@ -10,7 +10,9 @@ export const config = {
   },
   gemini: {
     apiKey: process.env.GEMINI_API_KEY || '',
-    model: process.env.GEMINI_MODEL || 'gemini-3.6-flash'
+    model: process.env.GEMINI_MODEL || 'gemini-3.6-flash',
+    // 0 disables thinking (fastest for slip extraction); negative = model default
+    thinkingBudget: parseInt(process.env.GEMINI_THINKING_BUDGET || '0', 10)
   },
   liffId: process.env.LIFF_ID || '',
   adminKey: process.env.ADMIN_KEY || '',
@@ -30,6 +32,7 @@ export function initConfig(env: Record<string, string | undefined>) {
   config.line.channelAccessToken = env.LINE_CHANNEL_ACCESS_TOKEN || '';
   config.gemini.apiKey = env.GEMINI_API_KEY || '';
   config.gemini.model = env.GEMINI_MODEL || process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+  config.gemini.thinkingBudget = parseInt(env.GEMINI_THINKING_BUDGET || process.env.GEMINI_THINKING_BUDGET || '0', 10);
   config.liffId = env.LIFF_ID || '';
   config.adminKey = env.ADMIN_KEY || '';
   config.typhoon.apiKey = env.TYPHOON_API_KEY || '';

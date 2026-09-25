@@ -212,16 +212,110 @@ describe('Vision LLM Slip Extraction Service (Gemini)', () => {
     const result = await extractSlipInfo(dummyBuffer, 'image/jpeg', mockGemini);
 
     expect(result.amount).toBe(350.5);
-    // The Gemini prompt must contain the Typhoon OCR output
+    // The Gemini prompt must contain the Typhoon OCR output...
     const contents = promptSpy.mock.calls[0][0].contents;
-    const promptText = contents[0].parts[1].text;
+    // ...as TEXT ONLY — no image part is attached when OCR succeeded
+    expect(contents[0].parts).toHaveLength(1);
+    const promptText = contents[0].parts[0].text;
     expect(promptText).toContain('OCR text extracted from the image');
     expect(promptText).toContain('โอนเงิน 350.50');
+    expect(contents[0].parts[0].inlineData).toBeUndefined();
+    // Deterministic extraction settings
+    const requestConfig = promptSpy.mock.calls[0][0].config;
+    expect(requestConfig.temperature).toBe(0);
+    expect(requestConfig.responseSchema).toBeDefined();
+    expect(requestConfig.abortSignal).toBeDefined();
     // OCR endpoint was actually called
     expect(fetchMock.mock.calls[0][0]).toContain('api.opentyphoon.ai');
 
     config.typhoon.apiKey = '';
     delete (global as any).fetch;
+  });
+
+  it('should attach the image when Typhoon OCR is not configured', async () => {
+    config.typhoon.apiKey = '';
+    const promptSpy = jest.fn().mockResolvedValue({
+      text: JSON.stringify({
+        is_slip: true, amount: 100, date: '2026-09-23',
+        merchant: '7-Eleven', direction: 'expense', category: 'ของใช้ทั่วไป', confidence: 'high'
+      })
+    });
+    const mockGemini = { models: { generateContent: promptSpy } } as any;
+
+    const result = await extractSlipInfo(dummyBuffer, 'image/jpeg', mockGemini);
+
+    expect(result.amount).toBe(100);
+    const parts = promptSpy.mock.calls[0][0].contents[0].parts;
+    expect(parts).toHaveLength(2);
+    expect(parts[0].inlineData.mimeType).toBe('image/jpeg');
+  });
+
+  it('should correct a hallucinated amount using the baht-marked number in OCR text', async () => {
+    config.typhoon.apiKey = 'test_typhoon_key';
+    global.fetch = jest.fn().mockResolvedValue(new Response(
+      JSON.stringify({ choices: [{ message: { content: 'KBank\nโอนเงินสำเร็จ\nจำนวนเงิน 1,250.00 บาท\n23/09/2568' } }] }),
+      { status: 200 }
+    )) as any;
+
+    const mockGemini = {
+      models: {
+        generateContent: jest.fn().mockResolvedValue({
+          text: JSON.stringify({
+            is_slip: true, amount: 999, date: '2026-09-23',
+            merchant: 'KBank', direction: 'expense',
+            category: 'อื่นๆ', confidence: 'high'
+          })
+        })
+      }
+    } as any;
+
+    const result = await extractSlipInfo(dummyBuffer, 'image/jpeg', mockGemini);
+
+    // The single baht-marked number on the slip wins over the LLM guess
+    expect(result.amount).toBe(1250);
+
+    config.typhoon.apiKey = '';
+    delete (global as any).fetch;
+  });
+
+  it('should reject a date in the future', async () => {
+    config.typhoon.apiKey = '';
+    const mockGemini = {
+      models: {
+        generateContent: jest.fn().mockResolvedValue({
+          text: JSON.stringify({
+            is_slip: true, amount: 100, date: '2030-01-01',
+            merchant: '7-Eleven', direction: 'expense', confidence: 'high'
+          })
+        })
+      }
+    } as any;
+
+    const result = await extractSlipInfo(dummyBuffer, 'image/jpeg', mockGemini);
+
+    expect(result.date).toBeNull();
+  });
+
+  it('should retry without thinkingConfig when the model rejects it', async () => {
+    config.typhoon.apiKey = '';
+    const thinkingError: any = new Error('thinkingConfig is not supported for this model');
+    thinkingError.status = 400;
+    const promptSpy = jest.fn()
+      .mockRejectedValueOnce(thinkingError)
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          is_slip: true, amount: 100, date: '2026-09-23',
+          merchant: '7-Eleven', direction: 'expense', confidence: 'high'
+        })
+      });
+    const mockGemini = { models: { generateContent: promptSpy } } as any;
+
+    const result = await extractSlipInfo(dummyBuffer, 'image/jpeg', mockGemini);
+
+    expect(result.amount).toBe(100);
+    expect(promptSpy).toHaveBeenCalledTimes(2);
+    expect(promptSpy.mock.calls[0][0].config.thinkingConfig).toBeDefined();
+    expect(promptSpy.mock.calls[1][0].config.thinkingConfig).toBeUndefined();
   });
 
   it('should fall back to image-only Gemini when Typhoon OCR fails', async () => {

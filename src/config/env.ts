@@ -13,7 +13,11 @@ export const config = {
     model: process.env.GEMINI_MODEL || 'gemini-3.6-flash'
   },
   liffId: process.env.LIFF_ID || '',
-  adminKey: process.env.ADMIN_KEY || ''
+  adminKey: process.env.ADMIN_KEY || '',
+  typhoon: {
+    apiKey: process.env.TYPHOON_API_KEY || '',
+    model: process.env.TYPHOON_MODEL || 'typhoon-ocr-7b'
+  }
 };
 
 /**
@@ -28,6 +32,8 @@ export function initConfig(env: Record<string, string | undefined>) {
   config.gemini.model = env.GEMINI_MODEL || process.env.GEMINI_MODEL || 'gemini-3.6-flash';
   config.liffId = env.LIFF_ID || '';
   config.adminKey = env.ADMIN_KEY || '';
+  config.typhoon.apiKey = env.TYPHOON_API_KEY || '';
+  config.typhoon.model = env.TYPHOON_MODEL || process.env.TYPHOON_MODEL || 'typhoon-ocr-7b';
 }
 
 export function validateConfig() {

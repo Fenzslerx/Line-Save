@@ -106,6 +106,7 @@ async function load() {
       '<div class="status">' + dot(s.database.ok) + '<span class="nm">ฐานข้อมูล (D1)</span><span class="dt">' + esc(s.database.message) + '</span></div>' +
       '<div class="status">' + dot(s.ai.key_configured) + '<span class="nm">AI · Gemini Vision</span><span class="dt">' + esc(s.ai.model) + (s.ai.key_configured ? ' · เชื่อมต่ออยู่' : ' · ⚠️ ยังไม่ตั้ง GEMINI_API_KEY') +
         (aiLast ? '<br>เรียกล่าสุด ' + fmtT(aiLast) : '') + '</span></div>' +
+      '<div class="status">' + dot(s.typhoon.key_configured) + '<span class="nm">OCR · Typhoon</span><span class="dt">' + esc(s.typhoon.model) + ' · ' + esc(s.typhoon.pipeline) + '</span></div>' +
       '<div class="status">' + dot(s.line.secret_configured && s.line.token_configured) + '<span class="nm">LINE Messaging API</span><span class="dt">' +
         (s.line.secret_configured && s.line.token_configured ? 'พร้อมใช้งาน' : '⚠️ ตั้งค่าไม่ครบ') + '</span></div>' +
       '<div class="status">' + dot(s.liff.id_configured) + '<span class="nm">LIFF</span><span class="dt">' +

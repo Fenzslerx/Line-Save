@@ -1,4 +1,5 @@
 import { extractSlipInfo } from '../src/services/vision';
+import { config } from '../src/config/env';
 
 describe('Vision LLM Slip Extraction Service (Gemini)', () => {
   const dummyBuffer = Buffer.from('fake_image_bytes');
@@ -189,6 +190,61 @@ describe('Vision LLM Slip Extraction Service (Gemini)', () => {
 
     const result = await extractSlipInfo(dummyBuffer, 'image/jpeg', mockGemini);
     expect(result.category).toBeNull();
+  });
+
+  it('should pass Typhoon OCR text to Gemini when the key is configured', async () => {
+    config.typhoon.apiKey = 'test_typhoon_key';
+    const fetchMock = jest.fn().mockResolvedValue(new Response(
+      JSON.stringify({ choices: [{ message: { content: 'KBank\nโอนเงิน 350.50 บาท\n23/09/2568 นายสมชาย' } }] }),
+      { status: 200 }
+    ));
+    global.fetch = fetchMock as any;
+
+    const promptSpy = jest.fn().mockResolvedValue({
+      text: JSON.stringify({
+        is_slip: true, amount: 350.5, date: '2026-09-23',
+        merchant: 'นายสมชาย', direction: 'expense',
+        category: 'อาหารและเครื่องดื่ม', confidence: 'high'
+      })
+    });
+    const mockGemini = { models: { generateContent: promptSpy } } as any;
+
+    const result = await extractSlipInfo(dummyBuffer, 'image/jpeg', mockGemini);
+
+    expect(result.amount).toBe(350.5);
+    // The Gemini prompt must contain the Typhoon OCR output
+    const contents = promptSpy.mock.calls[0][0].contents;
+    const promptText = contents[0].parts[1].text;
+    expect(promptText).toContain('OCR text extracted from the image');
+    expect(promptText).toContain('โอนเงิน 350.50');
+    // OCR endpoint was actually called
+    expect(fetchMock.mock.calls[0][0]).toContain('api.opentyphoon.ai');
+
+    config.typhoon.apiKey = '';
+    delete (global as any).fetch;
+  });
+
+  it('should fall back to image-only Gemini when Typhoon OCR fails', async () => {
+    config.typhoon.apiKey = 'test_typhoon_key';
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    global.fetch = jest.fn().mockRejectedValue(new Error('network down')) as any;
+
+    const promptSpy = jest.fn().mockResolvedValue({
+      text: JSON.stringify({
+        is_slip: true, amount: 100, date: '2026-09-23',
+        merchant: '7-Eleven', direction: 'expense', category: 'ของใช้ทั่วไป', confidence: 'high'
+      })
+    });
+    const mockGemini = { models: { generateContent: promptSpy } } as any;
+
+    const result = await extractSlipInfo(dummyBuffer, 'image/jpeg', mockGemini);
+
+    expect(result.amount).toBe(100);
+    const promptText = promptSpy.mock.calls[0][0].contents[0].parts[1].text;
+    expect(promptText).not.toContain('OCR text extracted');
+    warnSpy.mockRestore();
+    config.typhoon.apiKey = '';
+    delete (global as any).fetch;
   });
 
   it('should gracefully handle API call failures', async () => {

@@ -53,6 +53,12 @@ export async function handleAdminApi(request: Request, url: URL): Promise<Respon
         model: config.gemini.model,
         key_configured: Boolean(config.gemini.apiKey)
       },
+      typhoon: {
+        provider: 'Typhoon OCR (SCB 10X)',
+        model: config.typhoon.model,
+        key_configured: Boolean(config.typhoon.apiKey),
+        pipeline: config.typhoon.apiKey ? 'Typhoon OCR → Gemini' : 'Gemini (image only)'
+      },
       line: {
         secret_configured: Boolean(config.line.channelSecret),
         token_configured: Boolean(config.line.channelAccessToken)

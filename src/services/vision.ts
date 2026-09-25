@@ -1,5 +1,17 @@
 import { GoogleGenAI } from '@google/genai';
 import { config } from '../config/env';
+import { ocrImage } from './typhoon';
+import { getD1 } from '../db/client';
+import { logEvent } from '../db/events';
+
+/** Best-effort event logging that never breaks extraction. */
+function tryLog(level: 'info' | 'warn' | 'error', event: string, detail: string): void {
+  try {
+    logEvent(getD1(), level, 'ai', event, detail);
+  } catch {
+    /* database not bound (local dev) — skip */
+  }
+}
 
 export interface SlipExtractionResult {
   is_slip: boolean;
@@ -93,6 +105,24 @@ export async function extractSlipInfo(
   const base64Data = imageBuffer.toString('base64');
   const model = config.gemini.model;
 
+  // Stage 1 (optional): Typhoon OCR reads the slip text — fast and Thai-accurate.
+  // Its output is passed to Gemini alongside the image for more reliable parsing.
+  let ocrText: string | null = null;
+  if (config.typhoon.apiKey) {
+    const t0 = Date.now();
+    try {
+      ocrText = await ocrImage(imageBuffer, mimeType);
+      tryLog('info', 'typhoon_ocr_ok', `latency=${Date.now() - t0}ms chars=${ocrText.length}`);
+    } catch (err: any) {
+      // Non-fatal: fall back to Gemini reading the image directly
+      tryLog('warn', 'typhoon_ocr_fail', String(err?.message || err));
+    }
+  }
+
+  const userPrompt = ocrText
+    ? `Analyze this payment slip. OCR text extracted from the image:\n"""\n${ocrText}\n"""\nUse the OCR text as the primary source and the image to resolve ambiguity. Output the transaction details as JSON.`
+    : 'Analyze this image and output the transaction details as JSON.';
+
   const MAX_RETRIES = 3;
   let lastError: any;
 
@@ -105,7 +135,7 @@ export async function extractSlipInfo(
             role: 'user',
             parts: [
               { inlineData: { mimeType: mimeType, data: base64Data } },
-              { text: 'Analyze this image and output the transaction details as JSON.' }
+              { text: userPrompt }
             ]
           }
         ],

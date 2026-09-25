@@ -9,8 +9,11 @@
 import { initConfig, config } from './config/env';
 import { processWebhookEvent } from './handlers/webhook';
 import { setD1Database, D1Database } from './db/client';
+import { logEvent } from './db/events';
 import { handleLiffApi } from './liff/api';
 import { renderLiffPage } from './liff/page';
+import { renderAdminPage } from './admin/page';
+import { handleAdminApi } from './admin/api';
 
 /**
  * LINE webhook signature check using Web Crypto (available on Workers).
@@ -80,6 +83,16 @@ export default {
       return handleLiffApi(request, url);
     }
 
+    if (request.method === 'GET' && url.pathname === '/admin') {
+      return new Response(renderAdminPage(), {
+        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }
+      });
+    }
+
+    if (url.pathname.startsWith('/api/admin/')) {
+      return handleAdminApi(request, url);
+    }
+
     if (request.method === 'POST' && url.pathname === '/webhook') {
       const rawBody = await request.text();
       const signature = request.headers.get('x-line-signature') || '';
@@ -103,6 +116,7 @@ export default {
           events.map(event =>
             processWebhookEvent(event).catch(err => {
               console.error('[Webhook Background] Error processing event:', err);
+              logEvent(env.DB, 'error', 'bot', 'event_processing_error', String(err?.message || err));
             })
           )
         )

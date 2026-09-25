@@ -14,6 +14,7 @@ import {
   saveExtractionCache
 } from '../db/queries';
 import { findCategoryRule } from '../db/liff';
+import { logEvent } from '../db/events';
 import {
   createAutoSavedFlex,
   createSummaryFlex
@@ -183,9 +184,17 @@ async function handleImageMessage(event: any, userId: string, groupId: string | 
   const imageHash = `img:${crypto.createHash('sha256').update(imageBuffer).digest('hex')}`;
   let extraction = db ? await getCachedExtraction(db, imageHash).catch(() => null) : null;
   if (extraction) {
+    logEvent(db, 'info', 'ai', 'gemini_cache_hit', imageHash.slice(0, 20));
     console.log('[Slip Detection] Extraction served from cache.');
   } else {
-    extraction = await extractSlipInfo(imageBuffer);
+    try {
+      const t0 = Date.now();
+      extraction = await extractSlipInfo(imageBuffer);
+      logEvent(db, 'info', 'ai', 'gemini_call_ok', `model=${config.gemini.model} latency=${Date.now() - t0}ms is_slip=${extraction.is_slip}`);
+    } catch (err: any) {
+      logEvent(db, 'error', 'ai', 'gemini_call_fail', String(err?.message || err));
+      throw err;
+    }
     if (db && extraction.is_slip) {
       await saveExtractionCache(db, imageHash, extraction).catch(() => {});
     }
@@ -197,9 +206,9 @@ async function handleImageMessage(event: any, userId: string, groupId: string | 
   }
 
   console.log('[Slip Detection] Vision Result:', extraction);
-
   // If not a slip, stay completely silent (especially in groups)
   if (!extraction.is_slip || extraction.amount === null) {
+    logEvent(db, 'info', 'bot', 'image_not_slip', `msg=${messageId}`);
     console.log('[Slip Detection] Image is not a recognized slip. Staying silent.');
     return;
   }
@@ -228,6 +237,7 @@ async function handleImageMessage(event: any, userId: string, groupId: string | 
     date: txDate
   });
   console.log(`[Slip Detection] Auto-saved: ${txType} ฿${extraction.amount} [${category}]`);
+  logEvent(db, 'info', 'bot', 'slip_saved', `${txType} ฿${extraction.amount} [${category}] by ${userId}${groupId ? ` in ${groupId}` : ''}`);
 
   const flexMessage = createAutoSavedFlex({
     amount: extraction.amount,

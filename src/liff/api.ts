@@ -14,6 +14,7 @@ import {
   monthShift
 } from '../db/liff';
 import { upsertUser } from '../db/queries';
+import { logEvent } from '../db/events';
 
 interface LiffUser {
   userId: string;
@@ -201,6 +202,7 @@ export async function handleLiffApi(request: Request, url: URL): Promise<Respons
     return Response.json({ error: 'not found' }, { status: 404 });
   } catch (err: any) {
     console.error('[LIFF API] Error:', err);
+    logEvent(db, 'error', 'liff', 'api_error', `${method} ${route}: ${String(err?.message || err)}`);
     return Response.json({ error: err?.message || 'internal error' }, { status: 500 });
   }
 }

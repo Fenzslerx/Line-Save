@@ -31,7 +31,8 @@ import {
 import {
   createAutoSavedFlex,
   createSummaryFlex,
-  createDuplicateSlipFlex
+  createDuplicateSlipFlex,
+  createDirectionConfirmFlex
 } from '../templates/flex';
 
 const EXPENSE_CATEGORIES = ['อาหารและเครื่องดื่ม', 'การเดินทาง', 'ของใช้ทั่วไป', 'บิลและสาธารณูปโภค', 'อื่นๆ'];
@@ -138,13 +139,15 @@ async function saveSlipFromExtraction(
  *      would mislabel them as expense).
  *   2. FROM side is the owner's own name → outgoing, confirms expense.
  *   3. A name remembered as an INCOME payer sits in the FROM position → income.
- * Returns the corrected direction + counterparty, or null to keep keyword guess.
+ * Returns the corrected direction + counterparty + which rule decided it
+ * (self rules are authoritative; payer memory is strong), or null to keep
+ * the keyword guess.
  */
 async function inferDirectionFromMemory(
   db: D1Database,
   userId: string,
   extraction: SlipExtractionResult
-): Promise<{ direction: 'income' | 'expense'; merchant: string | null } | null> {
+): Promise<{ direction: 'income' | 'expense'; merchant: string | null; bySelf: boolean } | null> {
   const from = extraction.party_from;
   const to = extraction.party_to;
   if (!from && !to) return null;
@@ -160,18 +163,18 @@ async function inferDirectionFromMemory(
 
   if (toOwn && !fromOwn && from) {
     logEvent(db, 'info', 'bot', 'self_rule_income', null, {});
-    return { direction: 'income', merchant: from };
+    return { direction: 'income', merchant: from, bySelf: true };
   }
   if (fromOwn && !toOwn) {
     logEvent(db, 'info', 'bot', 'self_rule_expense', null, {});
-    return { direction: 'expense', merchant: extraction.merchant ?? to ?? null };
+    return { direction: 'expense', merchant: extraction.merchant ?? to ?? null, bySelf: true };
   }
 
   if (from) {
     const payer = await findContact(db, userId, from, 'income').catch(() => null);
     if (payer && payer.seen_count >= 1) {
       logEvent(db, 'info', 'bot', 'contact_memory_income', `seen=${payer.seen_count}`);
-      return { direction: 'income', merchant: from };
+      return { direction: 'income', merchant: from, bySelf: false };
     }
   }
   return null;
@@ -455,7 +458,6 @@ async function handleImageMessage(
     extraction.merchant = memoryDirection.merchant ?? extraction.merchant;
     extraction.category = null; // let the category chain re-resolve for the new type
   }
-
   await markStage('extracted');
   console.log('[Slip Detection] Vision Result:', extraction);
   // If not a slip, stay completely silent (especially in groups)
@@ -474,6 +476,44 @@ async function handleImageMessage(
   // Category priority: a rule the user taught via LIFF > the LLM's guess > "อื่นๆ"
   const saveDb = db ?? getD1();
   const category = await resolveSlipCategory(saveDb, userId, extraction.merchant, extraction.category, txType);
+
+  // Direction trust check — transfer slips naming two parties, NEITHER of which
+  // matches the account owner (and no payer memory), cannot be placed: it could
+  // be the user's outgoing slip OR an incoming screenshot from someone else.
+  // In that case never guess: ask with one tap. Wrong rows must not be written.
+  let directionSure: boolean;
+  if (memoryDirection) {
+    directionSure = true; // self-name or payer history decided it
+  } else if (extraction.party_from && extraction.party_to) {
+    directionSure = false; // two named parties, neither recognized as self
+  } else if (extraction.party_from || extraction.party_to) {
+    // One named party that is not self: income keyword is trustworthy,
+    // expense keyword on someone else's transfer screenshot is exactly the
+    // failing case — ask.
+    directionSure = extraction.direction === 'income';
+  } else {
+    directionSure = true; // merchant receipt / QR payment without party lines
+  }
+
+  if (!directionSure && db) {
+    await setSlipStage(db, messageId, 'awaiting_confirm', 'pending', userId);
+    logStage(db, requestId, 'direction_unsure', { guessed: txType });
+    console.log(`[Slip Detection] [${requestId}] Direction unsure (${txType}) — asking user.`);
+    try {
+      await replyLineMessage(replyToken, [
+        createDirectionConfirmFlex({
+          amount: extraction.amount,
+          category,
+          merchant: extraction.merchant,
+          date: txDate,
+          messageId
+        })
+      ]);
+    } finally {
+      await finishRequest(db, requestId, 'ignored', Date.now() - requestStart, 'awaiting_direction');
+    }
+    return;
+  }
 
   // Content-based dedup: same user + type + amount + date + merchant already
   // saved means this is very likely the same slip sent again (re-screenshot,
@@ -727,6 +767,55 @@ async function handlePostback(
           category: newCategory,
           txId: tx.id,
           messageId: msgId || null
+        })
+      ]);
+      return;
+    }
+
+    if (act === 'confirm_type') {
+      const msgId = params.get('msg') || '';
+      const newType: 'income' | 'expense' = params.get('t') === 'income' ? 'income' : 'expense';
+      if (!userId || !msgId) {
+        await replyLineMessage(replyToken, [{ type: 'text', text: 'ใช้ปุ่มนี้ไม่ได้ในบริบทนี้ครับ' }]);
+        return;
+      }
+      const extraction = await getCachedExtraction(db, `msg:${msgId}`);
+      if (!extraction || !extraction.is_slip || extraction.amount === null) {
+        await setSlipStage(db, msgId, 'extracted', 'failed', userId);
+        await replyLineMessage(replyToken, [
+          { type: 'text', text: 'หมดอายุการยืนยันแล้ว ส่งสลิปมาใหม่ได้เลยครับ' }
+        ]);
+        return;
+      }
+      // Double-tap guard — the first tap already wrote the row
+      const doneMarker = await getCachedExtraction(db, `saved:${msgId}`).catch(() => null);
+      if (doneMarker) {
+        await replyLineMessage(replyToken, [{ type: 'text', text: 'รายการนี้บันทึกไปแล้วครับ' }]);
+        return;
+      }
+      await saveExtractionCache(db, `saved:${msgId}`, extraction).catch(() => {});
+
+      // The user's verdict IS the ground truth — apply it and teach the memory
+      extraction.direction = newType;
+      if (newType === 'income' && extraction.party_from) extraction.merchant = extraction.party_from;
+      if (newType === 'expense' && extraction.party_to) extraction.merchant = extraction.party_to;
+      const saved = await saveSlipFromExtraction(db, userId, groupId, extraction);
+      await setSlipStage(db, msgId, 'saved', 'done', userId);
+      if (newType === 'income' && extraction.party_to) {
+        await upsertContact(db, userId, extraction.party_to, 'self', null).catch(() => {});
+      }
+      if (newType === 'expense' && extraction.party_from) {
+        await upsertContact(db, userId, extraction.party_from, 'self', null).catch(() => {});
+      }
+      await replyLineMessage(replyToken, [
+        createAutoSavedFlex({
+          amount: saved.amount,
+          merchant: saved.merchant ?? null,
+          date: saved.date,
+          type: saved.type,
+          category: saved.category ?? 'อื่นๆ',
+          txId: saved.id,
+          messageId: msgId
         })
       ]);
       return;

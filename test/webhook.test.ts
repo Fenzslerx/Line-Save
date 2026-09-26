@@ -518,6 +518,76 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
     expect(reply.text).toContain('จดจำชื่อบัญชี');
   });
 
+  it('should ask for direction (not save) when a transfer slip names two unknown parties', async () => {
+    const { upsertContact } = jest.requireMock('../src/db/liff');
+    (upsertContact as jest.Mock).mockClear();
+    (extractSlipInfo as jest.Mock).mockResolvedValueOnce({
+      is_slip: true, amount: 750, date: '2026-09-26', merchant: 'นายสมชาย',
+      direction: 'expense', category: null, confidence: 'high',
+      party_from: 'นายสมชาย', party_to: 'ร้านตัวแทน'
+    });
+    (getD1 as jest.Mock)
+      .mockReturnValueOnce(makeMockD1([]))
+      .mockReturnValueOnce(makeMockD1([]))
+      .mockReturnValueOnce(makeMockD1([]));
+
+    const repliesBefore = (replyLineMessage as jest.Mock).mock.calls.length;
+    const res = await postWebhook(makeImageEvent('326007', '2f377ba0337f43769f6e07dd95ab0f7f', {
+      type: 'user', userId: 'U_TEST_USER_001'
+    }));
+
+    expect(res.status).toBe(200);
+    await waitForMockCalls(replyLineMessage as jest.Mock, repliesBefore + 1);
+
+    const flex = (replyLineMessage as jest.Mock).mock.calls[repliesBefore][1][0];
+    const flexJson = JSON.stringify(flex);
+    expect(flexJson).toContain('ยืนยันประเภทรายการ');
+    expect(flexJson).toContain('act=confirm_type');
+    // Nothing was written — the row is only created after the user taps
+    expect(upsertContact).not.toHaveBeenCalled();
+  });
+
+  it('should save with the chosen direction on confirm_type and teach the memory', async () => {
+    const cachedExtraction = {
+      is_slip: true, amount: 750, date: '2026-09-26', merchant: 'นายสมชาย',
+      direction: 'expense', category: null, confidence: 'high',
+      party_from: 'นายสมชาย', party_to: 'ร้านตัวแทน'
+    };
+    (getD1 as jest.Mock)
+      .mockReturnValueOnce(makeMockD1([])) // request log handle
+      .mockReturnValueOnce(makeMockD1([])) // auto-record user
+      .mockReturnValueOnce(makeMockD1([], {
+        'msg:': [{ result_json: JSON.stringify(cachedExtraction) }]
+      }));
+
+    const repliesBefore = (replyLineMessage as jest.Mock).mock.calls.length;
+    const res = await postWebhook({
+      destination: 'U1234567890abcdef',
+      events: [
+        {
+          type: 'postback',
+          postback: { data: 'act=confirm_type&msg=633466000&t=income' },
+          timestamp: 1625097660000,
+          source: { type: 'user', userId: 'U_TEST_USER_001' },
+          replyToken: '3f377ba0337f43769f6e07dd95ab0f7d',
+          mode: 'active'
+        }
+      ]
+    });
+
+    expect(res.status).toBe(200);
+    await waitForMockCalls(replyLineMessage as jest.Mock, repliesBefore + 1);
+
+    const flex = (replyLineMessage as jest.Mock).mock.calls[repliesBefore][1][0];
+    const flexJson = JSON.stringify(flex);
+    expect(flexJson).toContain('บันทึกรายรับแล้ว');
+    expect(flexJson).toContain('+฿750');
+    // Learned: the sender becomes an income payer; the receiver was self
+    const { upsertContact } = jest.requireMock('../src/db/liff');
+    expect(upsertContact).toHaveBeenCalledWith(expect.anything(), 'U_TEST_USER_001', 'นายสมชาย', 'income', expect.any(String));
+    expect(upsertContact).toHaveBeenCalledWith(expect.anything(), 'U_TEST_USER_001', 'ร้านตัวแทน', 'self', null);
+  });
+
   it('should flip a transaction to income via the toggle_type postback', async () => {
     const txRow = {
       id: 'TX_TOGGLE_1', user_id: 'U_TEST_USER_001', group_id: null, type: 'expense',

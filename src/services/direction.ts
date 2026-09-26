@@ -75,14 +75,19 @@ export interface DirectionVerdict {
 // ---------------------------------------------------------------------------
 
 const NAME_PREFIX_RE = /^(ว่าที่|นาย|นางสาว|นาง|ด\.ต\.|จ\.อ\.|ร\.ต\.|ส\.อ\.|พ\.ต\.|ม\.ล\.|ม\.จ\.|คุณ)\s*/i;
+/** KBank and most Thai banks print names in English with titles — strip them so
+ *  a registered Thai name or a corrected English variant can still match. */
+const NAME_PREFIX_EN_RE = /^(mrs\.?|miss\.?|mr\.?|ms\.?)\s*/i;
 
-/** Strip titles/spaces/punctuation; lowercase. นายสมชาย ใจดี → สมชายใจดี */
+/** Strip titles/spaces/punctuation; lowercase. นายสมชาย ใจดี → สมชายใจดี,
+ *  MR. SOMCHAI JAIDEE → somchaijaidee */
 export function normalizeName(name: string): string {
   let n = String(name || '');
   let prev = '';
   while (n !== prev) {
     prev = n;
     n = n.replace(NAME_PREFIX_RE, '');
+    n = n.replace(NAME_PREFIX_EN_RE, '');
   }
   return n.replace(/[\s.:\-]/g, '').toLowerCase().trim();
 }

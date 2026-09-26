@@ -184,6 +184,11 @@ describe('helpers', () => {
     expect(normalizeName('KBank x1234')).toBe('kbankx1234');
   });
 
+  it('normalizeName strips English bank titles (KBank prints MR./MRS. names)', () => {
+    expect(normalizeName('MR. SOMCHAI JAIDEE')).toBe('somchaijaidee');
+    expect(normalizeName('Mrs. Suda')).toBe('suda');
+  });
+
   it('isSameName: exact, ≥4-char containment, rejects short noise', () => {
     expect(isSameName('นายสมชาย', 'สมชายใจดี')).toBe(true);
     expect(isSameName('Abc', 'abcd')).toBe(false); // short side < 4

@@ -233,7 +233,7 @@ export async function extractSlipInfo(
         responseMimeType: 'application/json',
         responseSchema: SLIP_RESPONSE_SCHEMA,
         temperature: 0,
-        maxOutputTokens: 1024,
+        maxOutputTokens: 2048,
         abortSignal: AbortSignal.timeout(15_000)
       };
       if (applyThinking) {
@@ -252,7 +252,14 @@ export async function extractSlipInfo(
       });
 
       let textContent = response.text || '';
-      if (!textContent) return fallbackResult;
+      if (!textContent) {
+        // Empty output (e.g. the model spent the whole budget on thinking or
+        // the service hiccuped). Silently treating it as "not a slip" hid real
+        // failures — make it a retryable error instead, and give the next
+        // attempt the actual image when OCR text alone did not work.
+        if (ocrText && parts === textParts) parts = imageParts;
+        throw new Error('gemini_empty_response');
+      }
 
       // Strip markdown code fences in case the model ignores responseMimeType
       textContent = textContent.trim().replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '').trim();
@@ -293,8 +300,13 @@ export async function extractSlipInfo(
         attempt--;
         continue;
       }
-      // Retry on 5xx, rate limits, or JSON parsing errors (SyntaxError)
-      const isRetryable = error?.status === 503 || error?.status === 500 || error?.status === 429 || error instanceof SyntaxError;
+      // Retry on 5xx, rate limits, JSON parsing errors or empty responses
+      const isRetryable =
+        error?.status === 503 ||
+        error?.status === 500 ||
+        error?.status === 429 ||
+        /gemini_empty_response/.test(String(error?.message || '')) ||
+        error instanceof SyntaxError;
       if (isRetryable && attempt < MAX_RETRIES) {
         console.warn(`[Vision Service] Attempt ${attempt} failed: ${error.message}. Retrying in 0.8s...`);
         await new Promise(resolve => setTimeout(resolve, 800));
@@ -305,5 +317,6 @@ export async function extractSlipInfo(
   }
 
   console.error('[Vision Service] Error analyzing slip image after retries:', lastError);
+  tryLog('error', 'vision_extraction_failed', String(lastError?.message || lastError).slice(0, 200));
   return fallbackResult;
 }

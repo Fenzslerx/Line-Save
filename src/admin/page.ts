@@ -148,6 +148,7 @@ async function load() {
     '<h2>เมตริก (24 ชม.)</h2>' +
     '<div class="card">' +
       '<div class="kv"><span>สลิปที่ประมวลผล</span><b>' + fmtN(slips.total || 0) + ' <span class="mut">(สำเร็จ ' + fmtN(slips.success || 0) + ' · ผิดพลาด ' + fmtN(slips.failed || 0) + ' · ไม่ใช่สลิป ' + fmtN(slips.ignored || 0) + ')</span></b></div>' +
+      '<div class="kv"><span>ตัดเป็น "ไม่ใช่สลิป" <span class="mut">(24 ชม. · 1 ชม. ' + fmtN(slips.not_slip_1h || 0) + ')</span></span><b>' + ((slips.not_slip || 0) >= 3 ? '<span style="color:var(--amber);font-weight:800">' : '') + fmtN(slips.not_slip || 0) + '</b></div>' +
       '<div class="kv"><span>อัตราประมวลผลล้มเหลว <span class="mut">(สลิปที่พังกลางทาง)</span></span><b>' + pct((slips.failed || 0) / Math.max(1, slips.total || 0), 0.1) + '</b></div>' +
       '<div class="kv"><span>OCR fail rate <span class="mut">(7 วัน · 1 ชม. ' + pct(ocr.failRate1h || 0, 0.2) + ')</span></span><b>' + pct(ocr.failRate || 0, 0.2) + '</b></div>' +
       '<div class="kv"><span>Webhook latency p50 / p95</span><b>' + fmtMs(wl.p50) + ' / ' + fmtMs(wl.p95) + ' <span class="mut">(n=' + fmtN(wl.samples || 0) + ')</span></b></div>' +

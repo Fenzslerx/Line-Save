@@ -23,6 +23,8 @@ export interface SlipMetrics {
   failed: number;
   ignored: number;
   stuck: number; // 'processing' for > 5 min — pipeline broke mid-way
+  not_slip: number; // "not a slip" verdicts (24h) — spikes mean reading problems
+  not_slip_1h: number;
 }
 
 /** Slip pipeline throughput and failure counts within the window. */
@@ -40,12 +42,24 @@ export async function getSlipMetrics(db: D1Database, windowSeconds: number = DAY
     )
     .bind(cutoffOf(5 * 60), cutoffOf(windowSeconds))
     .first();
+  const ns = await db
+    .prepare(
+      `SELECT
+         COALESCE(SUM(ts >= ?), 0) AS not_slip_1h,
+         COUNT(*) AS not_slip
+       FROM request_logs
+       WHERE event_type = 'message.image' AND outcome = 'ignored' AND error = 'not_slip' AND ts >= ?`
+    )
+    .bind(cutoffOf(HOUR), cutoffOf(windowSeconds))
+    .first();
   return {
     total: Number(row?.total ?? 0),
     success: Number(row?.success ?? 0),
     failed: Number(row?.failed ?? 0),
     ignored: Number(row?.ignored ?? 0),
-    stuck: Number(row?.stuck ?? 0)
+    stuck: Number(row?.stuck ?? 0),
+    not_slip: Number(ns?.not_slip ?? 0),
+    not_slip_1h: Number(ns?.not_slip_1h ?? 0)
   };
 }
 
@@ -271,6 +285,25 @@ export async function getAlerts(db: D1Database): Promise<Alert[]> {
       level: 'warning',
       name: 'สลิปค้างใน pipeline',
       detail: `${stuck} รายการเข้ามาแล้วแต่บันทึกไม่เสร็จ`
+    });
+  }
+
+  // Many "not a slip" verdicts in the last hour — either users are really
+  // sending non-slips, or reading (OCR/LLM) is silently failing.
+  const slips1h = await getSlipMetrics(db, HOUR);
+  const imgs1hRow = await db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM request_logs
+       WHERE event_type = 'message.image' AND ts >= ?`
+    )
+    .bind(cutoffOf(HOUR))
+    .first();
+  const imgs1h = Number(imgs1hRow?.n ?? 0);
+  if (slips1h.not_slip_1h >= 3 && imgs1h > 0 && slips1h.not_slip_1h / imgs1h >= 0.6) {
+    alerts.push({
+      level: 'warning',
+      name: 'อ่านสลิปไม่ผ่านเป็นจำนวนมาก',
+      detail: `${slips1h.not_slip_1h}/${imgs1h} รูปใน 1 ชม. ถูกตัดเป็น "ไม่ใช่สลิป" — ตรวจ OCR/AI logs`
     });
   }
 

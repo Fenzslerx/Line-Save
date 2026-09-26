@@ -133,10 +133,13 @@ describe('Observability', () => {
   });
 
   describe('metrics', () => {
-    it('should aggregate slip outcomes including stuck pipelines', async () => {
-      const db = makeFakeD1([{ total: 10, success: 7, failed: 1, ignored: 1, stuck: 1 }]);
+    it('should aggregate slip outcomes including stuck pipelines and not-slip verdicts', async () => {
+      const db = makeFakeD1([
+        { total: 10, success: 7, failed: 1, ignored: 1, stuck: 1 },
+        { not_slip: 1, not_slip_1h: 0 }
+      ]);
       const m = await getSlipMetrics(db);
-      expect(m).toEqual({ total: 10, success: 7, failed: 1, ignored: 1, stuck: 1 });
+      expect(m).toEqual({ total: 10, success: 7, failed: 1, ignored: 1, stuck: 1, not_slip: 1, not_slip_1h: 0 });
     });
 
     it('should compute webhook latency percentiles', async () => {

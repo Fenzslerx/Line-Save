@@ -157,9 +157,23 @@ export function audit(
   logEvent(db, 'info', 'liff', 'audit', `${action} ${entity} ${entityId ?? ''}`);
 }
 
-/** Drop slip checkpoints older than 7 days — housekeeping, call opportunistically. */
+/** Housekeeping — call opportunistically after events:
+ *  - drop slip checkpoints older than 7 days
+ *  - drop extraction/dedup cache older than its 24h TTL (+ slack)
+ *  - purge the legacy `img:` key space (renamed to `img2:` — never valid again)
+ */
 export function cleanupOldSlipTracking(db: D1Database | null | undefined): void {
   if (!db) return;
-  const cutoff = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
-  db.prepare('DELETE FROM pending_slips WHERE updated_ts < ?').bind(cutoff).run().catch(() => {});
+  const now = Math.floor(Date.now() / 1000);
+  db.prepare('DELETE FROM pending_slips WHERE updated_ts < ?')
+    .bind(now - 7 * 24 * 60 * 60)
+    .run()
+    .catch(() => {});
+  db.prepare('DELETE FROM slip_dedup_cache WHERE created_at < ?')
+    .bind(now - 26 * 60 * 60)
+    .run()
+    .catch(() => {});
+  db.prepare("DELETE FROM slip_dedup_cache WHERE hash LIKE 'img:%'")
+    .run()
+    .catch(() => {});
 }

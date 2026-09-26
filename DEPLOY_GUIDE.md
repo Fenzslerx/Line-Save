@@ -1,64 +1,75 @@
-# สรุปขั้นตอน Deploy LINE Expense Bot บน Render (Free) & Supabase (Free)
+# Deploy นับล้าน (Line-Save) บน Cloudflare Workers — ทีละขั้น
 
-คู่มือนี้สรุปขั้นตอนแบบทีละขั้นตอนสำหรับการตั้งค่าจริงผ่าน Dashboard
-
----
-
-## 1. ตั้งค่า Supabase (Free Tier)
-1. เข้า [supabase.com](https://supabase.com) ➔ กด **New Project** (เลือก Region เช่น Singapore)
-2. เมื่อโปรเจกต์พร้อม ให้ไปที่เมนู **SQL Editor** ด้านซ้าย
-3. คัดลอกเนื้อหาทั้งหมดจากไฟล์ [migrations/001_init.sql](migrations/001_init.sql) วางลงในช่อง SQL แล้วกด **Run**
-4. ไปที่ **Project Settings** (ไอคอนฟันเฟือง) ➔ **API**
-   - คัดลอก **Project URL** (เก็บไว้ใช้เป็น `SUPABASE_URL`)
-   - ใต้หัวข้อ *Project API keys* คัดลอกค่า **`service_role` (secret)** (เก็บไว้ใช้เป็น `SUPABASE_SERVICE_KEY`)
-
-> ⚠️ **หมายเหตุสำคัญ**: Supabase Free Tier จะ **Auto-pause (หยุดชั่วคราว)** อัตโนมัติหากไม่มีการใช้งานเกิน 7 วัน หากบอทไม่บันทึกข้อมูล ให้ล็อกอินเข้า Supabase Dashboard แล้วกดปุ่ม **Restore**
-
-> 🛠 **ถ้าเคย Deploy ไปแล้วก่อนการแก้ไขนี้**: ให้เปิด SQL Editor แล้วรัน [migrations/002_fix_summary_date_filter.sql](migrations/002_fix_summary_date_filter.sql) เพิ่มด้วย 1 ครั้ง (แก้บั๊กที่ "สรุป" ในกลุ่มนับยอดทั้งหมดตั้งแต่ต้น ไม่ยึดช่วงเดือน)
+> ระบบทั้งหมดรันบน Cloudflare Workers + D1 (ไม่มีเซิร์ฟเวอร์) + LINE Messaging API
 
 ---
 
-## 2. ตั้งค่า LINE Developers Console
-1. เข้า [developers.line.biz](https://developers.line.biz) ➔ เลือก Channel แบบ **Messaging API**
-2. แท็บ **Basic settings**:
-   - คัดลอก **Channel secret** (ใช้เป็น `LINE_CHANNEL_SECRET`)
-3. แท็บ **Messaging API**:
-   - กด Issue ในส่วน **Channel access token (long-lived)** แล้วคัดลอกมา (ใช้เป็น `LINE_CHANNEL_ACCESS_TOKEN`)
-   - เลื่อนลงมาที่ **Auto-reply messages** ➔ กด Edit ➔ **ปิด Auto-reply** เพื่อไม่ให้ LINE ส่งข้อความซ้ำซ้อนกับบอท
+## 1. ติดตั้งและเชื่อม Cloudflare
 
----
+```bash
+npm install
+npx wrangler login          # เปิด browser ล็อกอิน Cloudflare
+```
 
-## 3. Deploy บน Render (Free Web Service)
-1. Push โค้ดโปรเจกต์นี้ขึ้น GitHub Repository ส่วนตัว
-2. เข้า [render.com](https://render.com) ➔ กด **New +** ➔ เลือก **Web Service**
-3. เชื่อมต่อ GitHub Repository ที่ push ไว้
-4. Render จะอ่านไฟล์ `render.yaml` ให้อัตโนมัติ หรือกรอกข้อมูลดังนี้:
-   - **Name**: `line-expense-bot`
-   - **Region**: `Singapore` (เพื่อความเร็วในการเชื่อมต่อ)
-   - **Branch**: `main`
-   - **Runtime**: `Node`
-   - **Build Command**: `npm install && npm run build`
-   - **Start Command**: `npm start`
-   - **Instance Type**: `Free`
-   - **Health Check Path**: `/health`
-5. ไปที่หัวข้อ **Environment Variables** แล้วเพิ่มตัวแปรต่อไปนี้:
-   - `LINE_CHANNEL_SECRET`: (ค่าที่ได้จาก LINE)
-   - `LINE_CHANNEL_ACCESS_TOKEN`: (ค่าที่ได้จาก LINE)
-   - `SUPABASE_URL`: (ค่าที่ได้จาก Supabase)
-   - `SUPABASE_SERVICE_KEY`: (service_role key จาก Supabase)
-   - `GEMINI_API_KEY`: (API Key จาก aistudio.google.com)
-6. กด **Create Web Service** ➔ รอจนกระทั่งสถานะขึ้น **Live**
-7. คัดลอก URL ของ Web Service ที่ Render สร้างให้ (เช่น `https://line-expense-bot.onrender.com`)
+สร้างฐานข้อมูล D1 (ครั้งแรกเท่านั้น) — แก้ `database_id` ใน `wrangler.jsonc` ให้ตรงกับที่ได้:
 
----
+```bash
+npx wrangler d1 create line-expense-db
+```
 
-## 4. เชื่อมต่อ Webhook URL ใน LINE
-1. กลับไปที่ **LINE Developers Console** ➔ แท็บ **Messaging API**
-2. ที่หัวข้อ **Webhook settings**:
-   - กด Edit ใส่ URL: `https://<YOUR_RENDER_URL>/webhook`
-   - กดปุ่ม **Verify** (ต้องขึ้นสถานะ Success)
-   - เปิดสวิตช์ **Use webhook** เป็น **On**
-3. สแกน QR Code เพิ่มเพื่อน LINE Bot เพื่อเริ่มใช้งาน:
-   - ส่งรูปสลิป ➔ บอทจะส่ง Flex Message ให้เลือกหมวดหมู่
-   - พิมพ์ `"สรุป"` ➔ บอทจะแสดงยอดรวมค่าใช้จ่ายประจำเดือน
-   - พิมพ์ `"ชื่อ [ชื่อเล่น]"` ➔ บันทึกชื่อของคุณลงในระบบ
+## 2. รัน Migrations
+
+```bash
+npx wrangler d1 execute line-expense-db --remote --file migrations/d1_schema.sql
+npx wrangler d1 execute line-expense-db --remote --file migrations/002_fix_summary_date_filter.sql
+npx wrangler d1 execute line-expense-db --remote --file migrations/004_system_events.sql
+npx wrangler d1 execute line-expense-db --remote --file migrations/005_observability.sql
+npx wrangler d1 execute line-expense-db --remote --file migrations/006_contact_names.sql
+npx wrangler d1 execute line-expense-db --remote --file migrations/007_contact_roles.sql
+```
+
+> 006/007 สลับกันได้ 007 จะยกข้อมูล 006 มาด้วย · ถ้าขึ้น `duplicate column` แปลว่าใส่ไปแล้ว ข้ามได้
+
+## 3. ตั้ง Secrets
+
+```bash
+npx wrangler secret put LINE_CHANNEL_SECRET
+npx wrangler secret put LINE_CHANNEL_ACCESS_TOKEN
+npx wrangler secret put GEMINI_API_KEY
+npx wrangler secret put TYPHOON_API_KEY
+npx wrangler secret put TYPHOON_MODEL      # typhoon-ocr-v1.5
+npx wrangler secret put LIFF_ID
+npx wrangler secret put ADMIN_KEY          # ตั้งรหัสยาว 10+ ตัวอักษร
+```
+
+## 4. LINE Developers Console
+
+1. สร้าง Channel แบบ **Messaging API**
+2. **Basic settings** → คัดลอก **Channel secret** (ขั้น 3)
+3. **Messaging API** → Issue **Channel access token (long-lived)** (ขั้น 3)
+4. ปิด **Auto-reply messages** (แก้ไข → OFF) และเปิด **Use webhook**
+5. (สมุดบัญชี LIFF) แท็บ LIFF → สร้าง LIFF app:
+   - Endpoint: `https://<ชื่อ-worker>.workers.dev/liff`
+   - Scope: `profile` + `chat_message.write` · Type: Full
+   - คัดลอก LIFF ID (ขั้น 3)
+6. **Webhook settings** → URL: `https://<ชื่อ-worker>.workers.dev/webhook` → กด **Verify** ให้ Success
+
+## 5. Deploy
+
+```bash
+npm run deploy:cf
+# https://line-expense-bot.<subdomain>.workers.dev
+curl https://line-expense-bot.<subdomain>.workers.dev/health   # {"status":"ok"}
+```
+
+## 6. ตรวจสอบหลัง deploy
+
+- ส่งสลิปเข้าแชท → ได้การ์ดใบเสร็จภายใน ~3-6 วินาที
+- `/admin` → ใส่ ADMIN_KEY → หน้า Live ต้องขึ้นกิจกรรมภายใน ~4 วินาที
+- ดู log สด: `npx wrangler tail`
+
+## ทราบดีเสมอ
+
+- **โควตา Gemini ฟรี** นับต่อวัน — สลิปส่วนใหญ่อ่านด้วย Typhoon OCR + rule parser (ไม่ใช้ AI) แต่ถ้าโควตาหมดแล้วสลิปยากจะอ่านไม่ได้: เปิด billing ที่ Google AI Studio เพื่อแก้ถาวร (admin จะมี alert เตือนเมื่อโควตาหมด)
+- Typhoon OCR ฟรีมี rate limit ต่อช่วงเวลา — ระบบ retry/backoff ให้แล้ว ส่งหลายใบพร้อมกันอาจช้าขึ้นเล็กน้อย
+- LIFF ครั้งแรกเข้าช้าเล็กน้อยครั้งเดียว (cold start), ครั้งถัดไปแสดงจาก cache ทันที

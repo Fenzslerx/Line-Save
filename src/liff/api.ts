@@ -12,7 +12,10 @@ import {
   setMonthlyBudget,
   saveCategoryRule,
   findCategoryRule,
-  monthShift
+  monthShift,
+  listSelfIdentities,
+  addSelfIdentity,
+  deleteSelfIdentity
 } from '../db/liff';
 import { upsertUser } from '../db/queries';
 import { logEvent } from '../db/events';
@@ -175,6 +178,26 @@ export async function handleLiffApi(request: Request, url: URL): Promise<Respons
       if (!Number.isFinite(amount) || amount < 0) return badRequest('monthly_budget must be a number');
       await setMonthlyBudget(db, user.userId, amount);
       audit(db, user.userId, 'set', 'budget', null, { monthly_budget: amount });
+      return Response.json({ ok: true });
+    }
+
+    // "บัญชีของฉัน" — the owner's registered names / account tails used by the
+    // direction engine (L1/L2). Registering these makes classification
+    // deterministic from the very first slip.
+    if (method === 'GET' && route === 'identities') {
+      const identities = await listSelfIdentities(db, user.userId);
+      return Response.json({ identities });
+    }
+    if (method === 'POST' && route === 'identities') {
+      const body = await readJson(request);
+      const value = String(body.value || '').trim();
+      if (!value) return badRequest('value is required');
+      const identity = await addSelfIdentity(db, user.userId, value);
+      return Response.json({ ok: true, identity });
+    }
+    if (method === 'DELETE' && route === 'identities') {
+      const body = await readJson(request);
+      await deleteSelfIdentity(db, user.userId, String(body.value || ''));
       return Response.json({ ok: true });
     }
 

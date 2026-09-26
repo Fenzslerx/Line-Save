@@ -12,7 +12,8 @@ import {
   getPendingSlipCount,
   getRecentAudit,
   getAlerts,
-  getLiveFeed
+  getLiveFeed,
+  getDirectionAccuracy
 } from '../db/metrics';
 import { config } from '../config/env';
 
@@ -53,7 +54,7 @@ export async function handleAdminApi(request: Request, url: URL): Promise<Respon
   }
 
   const db = getD1();
-  const [dbStatus, counts24h, counts7d, errors, ai24h, ai7d, slips, webhookLat, aiLat, ocr, errBySource, activeUsers, reply, sigFails, pendingSlips, audit, alerts] = await Promise.all([
+  const [dbStatus, counts24h, counts7d, errors, ai24h, ai7d, slips, webhookLat, aiLat, ocr, errBySource, activeUsers, reply, sigFails, pendingSlips, audit, alerts, direction] = await Promise.all([
     checkDatabaseConnection(),
     getEventCounts(db, 60 * 60 * 24),
     getEventCounts(db, 7 * 60 * 60 * 24),
@@ -70,7 +71,8 @@ export async function handleAdminApi(request: Request, url: URL): Promise<Respon
     getSignatureFailures(db),
     getPendingSlipCount(db),
     getRecentAudit(db, 15),
-    getAlerts(db)
+    getAlerts(db),
+    getDirectionAccuracy(db, 30)
   ]);
 
   return Response.json({
@@ -116,6 +118,7 @@ export async function handleAdminApi(request: Request, url: URL): Promise<Respon
       pending_slips: pendingSlips
     },
     audit,
-    alerts
+    alerts,
+    direction
   });
 }

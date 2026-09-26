@@ -246,6 +246,13 @@ body.deleting .fab { display:none; }
   <!-- ============ ตั้งค่า ============ -->
   <div class="page" id="page-set">
     <div class="card">
+      <h3 style="font-size:15px;margin-bottom:4px">บัญชีของฉัน</h3>
+      <div class="hint" style="margin:0 0 8px">ชื่อ/เลขบัญชีที่ระบบใช้แยกรายรับ-รายจ่าย — ลงทะเบียนไว้ = แม่นตั้งแต่สลิปแรก</div>
+      <div id="idList" style="margin-bottom:8px"><div class="empty" style="padding:8px 0">ยังไม่ได้ลงทะเบียน</div></div>
+      <div class="field" style="margin-bottom:8px"><input id="idValue" placeholder="ชื่อบนบัญชี หรือ เลขบัญชี"></div>
+      <button class="btn-primary" onclick="addIdentity()">เพิ่ม</button>
+    </div>
+    <div class="card">
       <h3 style="font-size:15px;margin-bottom:10px">งบประจำเดือน</h3>
       <div class="field"><label>ยอดงบ (บาท) — ตั้ง 0 เพื่อลบ</label>
         <input type="number" id="budgetInput" min="0" placeholder="เช่น 15000"></div>
@@ -632,6 +639,7 @@ function showTab(t) {
     $('tab-' + k).classList.toggle('active', k === t);
   });
   if (t !== 'tx' && state.delMode) toggleDelMode();
+  if (t === 'set') loadIdentities();
 }
 function shiftMonth(d) {
   if (state.month === 'all') {
@@ -775,8 +783,38 @@ async function deleteTx() {
     btn.disabled = false;
   }
 }
-async function saveBudget() {
-  const v = parseFloat($('budgetInput').value || '0');
+/* ---- บัญชีของฉัน (owner identities) ---- */
+async function loadIdentities() {
+  try {
+    const r = await api('/api/liff/identities');
+    const j = await r.json();
+    const el = $('idList');
+    if (!j.identities || !j.identities.length) { el.innerHTML = '<div class="empty" style="padding:8px 0">ยังไม่ได้ลงทะเบียน</div>'; return; }
+    el.innerHTML = j.identities.map(i =>
+      '<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line)">' +
+      '<span style="flex:1;font-size:13.5px;font-weight:650">' + esc(i.kind === 'tail' ? 'บัญชีลงท้าย ••' + i.name.slice(4) : i.name) + '</span>' +
+      '<button onclick="removeIdentity(\\'' + esc(i.name) + '\\')" style="border:none;background:var(--red-soft);color:var(--red);border-radius:8px;padding:4px 10px;font-size:11.5px;font-weight:700;cursor:pointer">ลบ</button></div>'
+    ).join('');
+  } catch (e) {}
+}
+async function addIdentity() {
+  const v = $('idValue').value.trim();
+  if (!v) { toast('พิมพ์ชื่อหรือเลขบัญชีก่อนนะ'); return; }
+  try {
+    await api('/api/liff/identities', { method: 'POST', body: JSON.stringify({ value: v }) });
+    $('idValue').value = '';
+    toast('ลงทะเบียนแล้ว ✅');
+    loadIdentities();
+  } catch (e) { toast('เพิ่มไม่สำเร็จ ลองอีกครั้ง'); }
+}
+async function removeIdentity(value) {
+  try {
+    await api('/api/liff/identities', { method: 'DELETE', body: JSON.stringify({ value }) });
+    toast('ลบแล้ว');
+    loadIdentities();
+  } catch (e) { toast('ลบไม่สำเร็จ'); }
+}
+async function saveBudget() {  const v = parseFloat($('budgetInput').value || '0');
   const btn = event && event.target;
   if (btn) btn.disabled = true;
   try {

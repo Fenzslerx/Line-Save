@@ -25,7 +25,8 @@ jest.mock('../src/db/metrics', () => ({
   getPendingSlipCount: jest.fn().mockResolvedValue(0),
   getRecentAudit: jest.fn().mockResolvedValue([]),
   getAlerts: jest.fn().mockResolvedValue([]),
-  getLiveFeed: jest.fn().mockResolvedValue({ now: 1, requests: [], events: [], slips: [] })
+  getLiveFeed: jest.fn().mockResolvedValue({ now: 1, requests: [], events: [], slips: [] }),
+  getDirectionAccuracy: jest.fn().mockResolvedValue({ days: 30, totalSaved: 0, corrections: 0, byRule: [] })
 }));
 
 function makeUrl(key?: string): URL {

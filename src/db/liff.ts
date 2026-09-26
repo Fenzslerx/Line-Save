@@ -360,3 +360,44 @@ export async function unlearnSelf(db: D1Database, userId: string, names: string[
         .bind(userId, n))
   ).catch(() => {});
 }
+
+export interface SelfIdentity {
+  /** Raw stored value — plain name or 'acc:<last4>' */
+  name: string;
+  kind: 'name' | 'tail';
+}
+
+/** The account owner's registered identities (for the LIFF "บัญชีของฉัน" page). */
+export async function listSelfIdentities(db: D1Database, userId: string): Promise<SelfIdentity[]> {
+  const { results } = await db
+    .prepare("SELECT name FROM contact_names WHERE user_id = ? AND type = 'self' ORDER BY name")
+    .bind(userId)
+    .all();
+  return (results || []).map(r => {
+    const name = String(r.name ?? '');
+    return { name, kind: name.startsWith('acc:') ? ('tail' as const) : ('name' as const) };
+  });
+}
+
+/** Register an owner identity: plain names as-is, digit inputs become acc:<last4>. */
+export async function addSelfIdentity(db: D1Database, userId: string, value: string): Promise<SelfIdentity> {
+  const v = String(value || '').trim().slice(0, 60);
+  if (!v) throw new Error('empty identity');
+  const digits = v.replace(/\D/g, '');
+  const isAccountNumber = /^[\d\s\-xX×*.]+$/.test(v) && digits.length >= 4;
+  const name = isAccountNumber ? 'acc:' + tail4(digits) : v;
+  await upsertContact(db, userId, name, 'self', null);
+  return { name, kind: name.startsWith('acc:') ? 'tail' : 'name' };
+}
+
+export async function deleteSelfIdentity(db: D1Database, userId: string, value: string): Promise<void> {
+  const v = String(value || '').trim();
+  if (!v) return;
+  const digits = v.replace(/\D/g, '');
+  const isAccountNumber = /^[\d\s\-xX×*.]+$/.test(v) && digits.length >= 4;
+  const target = isAccountNumber ? 'acc:' + tail4(digits) : v;
+  await db
+    .prepare("DELETE FROM contact_names WHERE user_id = ? AND type = 'self' AND name = ?")
+    .bind(userId, target)
+    .run();
+}

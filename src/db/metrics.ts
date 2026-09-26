@@ -318,6 +318,75 @@ export async function getLiveFeed(
   };
 }
 
+export interface DirectionAccuracy {
+  days: number;
+  totalSaved: number;
+  corrections: number;
+  byRule: { rule: string; saved: number; corrected: number }[];
+}
+
+/**
+ * How accurate each direction-engine rule actually is, measured by user
+ * corrections (set_type/confirm_type) over the window.
+ */
+export async function getDirectionAccuracy(db: D1Database, days: number = 30): Promise<DirectionAccuracy> {
+  const cutoff = cutoffOf(days * DAY);
+  const savedRows = await db
+    .prepare(
+      `SELECT json_extract(data, '$.rule') AS rule, COUNT(*) AS n
+       FROM system_events
+       WHERE event = 'stage_slip_saved' AND ts >= ?
+       GROUP BY rule ORDER BY n DESC`
+    )
+    .bind(cutoff)
+    .all();
+  const correctedRows = await db
+    .prepare(
+      `SELECT json_extract(data, '$.rule') AS rule, COUNT(*) AS n
+       FROM system_events
+       WHERE event = 'direction_correction' AND ts >= ?
+       GROUP BY rule`
+    )
+    .bind(cutoff)
+    .all();
+  const savedMap = new Map<string, number>();
+  let totalSaved = 0;
+  for (const r of savedRows.results || []) {
+    const rule = String(r.rule ?? 'unknown');
+    savedMap.set(rule, Number(r.n));
+    totalSaved += Number(r.n);
+  }
+  let corrections = 0;
+  const byRule: { rule: string; saved: number; corrected: number }[] = [];
+  const correctedMap = new Map<string, number>();
+  for (const r of correctedRows.results || []) {
+    const rule = String(r.rule ?? 'unknown');
+    correctedMap.set(rule, Number(r.n));
+    corrections += Number(r.n);
+  }
+  for (const [rule, saved] of savedMap) {
+    byRule.push({ rule, saved, corrected: correctedMap.get(rule) || 0 });
+  }
+  for (const [rule, corrected] of correctedMap) {
+    if (!savedMap.has(rule)) byRule.push({ rule, saved: 0, corrected });
+  }
+  return { days, totalSaved, corrections, byRule };
+}
+
+/** Times this counterparty was direction-corrected in the window (nudge trigger). */
+export async function countCorrectionsFor(db: D1Database, name: string, days: number = 30): Promise<number> {
+  if (!name) return 0;
+  const row = await db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM system_events
+       WHERE event = 'direction_correction'
+         AND json_extract(data, '$.name') = ? AND ts >= ?`
+    )
+    .bind(name, cutoffOf(days * DAY))
+    .first();
+  return Number(row?.n ?? 0);
+}
+
 export interface Alert {
   level: 'critical' | 'warning';
   name: string;

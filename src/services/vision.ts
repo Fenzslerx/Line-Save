@@ -22,6 +22,8 @@ export interface SlipExtractionResult {
   direction: 'income' | 'expense' | null; // null when the slip does not clearly show money in vs out
   category: string | null; // best-fit category name, normalized by the webhook
   confidence: 'high' | 'medium' | 'low';
+  /** Which direction-engine rule decided this save (metadata on the cached copy) */
+  direction_rule?: string;
   /** Both printed parties (จาก / ถึง) — set by the rule parser, used for transfer detection */
   party_from?: string | null;
   party_to?: string | null;
@@ -153,6 +155,7 @@ export async function extractSlipInfo(
   // Stage 1 (optional): Typhoon OCR reads the slip text — fast and Thai-accurate.
   // Its output is passed to Gemini for structuring into JSON.
   let ocrText: string | null = null;
+  let ocrLowQuality = false;
   if (config.typhoon.apiKey) {
     const t0 = Date.now();
     try {
@@ -162,7 +165,14 @@ export async function extractSlipInfo(
       // logging slip contents.
       const thaiChars = (ocrText.match(/[\u0E00-\u0E7F]/g) || []).length;
       const hintCount = (ocrText.match(new RegExp(SLIP_HINT_RE.source, 'gi')) || []).length;
-      tryLog('info', 'typhoon_ocr_stats', `latency=${Date.now() - t0}ms chars=${ocrText.length} thai=${(thaiChars / ocrText.length).toFixed(2)} hints=${hintCount}`);
+      const ratio = ocrText.length ? thaiChars / ocrText.length : 0;
+      // v3 quality gate: garbled/mojibake OCR would poison the rule parser AND
+      // the text-only Gemini pass — such slips go straight to the image.
+      if (ratio < 0.35 || ocrText.length < 40) {
+        ocrLowQuality = true;
+        tryLog('warn', 'ocr_low_quality', `chars=${ocrText.length} thai=${ratio.toFixed(2)} — skipping parser, using image`);
+      }
+      tryLog('info', 'typhoon_ocr_stats', `latency=${Date.now() - t0}ms chars=${ocrText.length} thai=${ratio.toFixed(2)} hints=${hintCount}`);
     } catch (err: any) {
       // Non-fatal: fall back to Gemini reading the image directly
       tryLog('warn', 'typhoon_ocr_fail', String(err?.message || err));
@@ -172,7 +182,7 @@ export async function extractSlipInfo(
   // Primary path (free, no AI): Thai slips are templated — a rule-based parse
   // of the OCR text handles most of them. Gemini is only paid when the rules
   // cannot confidently read the slip (keeps the free quota alive).
-  if (ocrText) {
+  if (ocrText && !ocrLowQuality) {
     const parsed = parseSlipFromOcr(ocrText);
     if (parsed) {
       tryLog('info', 'ocr_parser_hit', `dir=${parsed.direction} has_date=${parsed.date !== null}`);
@@ -193,7 +203,7 @@ export async function extractSlipInfo(
     { inlineData: { mimeType: mimeType, data: imageBuffer.toString('base64') } },
     { text: 'Analyze this image and output the transaction details as JSON.' }
   ];
-  let parts: any[] = ocrText ? textParts : imageParts;
+  let parts: any[] = ocrText && !ocrLowQuality ? textParts : imageParts;
 
   const MAX_RETRIES = 3;
   let lastError: any;
@@ -267,7 +277,7 @@ export async function extractSlipInfo(
         result.party_to_tails = tails.to;
       }
 
-      // Safety net: the text-only pass sometimes misjudges a real slip as
+      // Safety net #1: the text-only pass sometimes misjudges a real slip as
       // "not a slip" (e.g. OCR wording the hint regex misses). Whenever the
       // text pass says no, retry once with the actual image attached — the
       // model reading the photo directly is far more reliable. Does not
@@ -276,6 +286,15 @@ export async function extractSlipInfo(
         usedImageFallback = true;
         parts = imageParts;
         tryLog('warn', 'not_slip_disagrees_with_ocr', 'retrying with image attached');
+        attempt--;
+        continue;
+      }
+      // Safety net #2 (v3): a parsed slip with LOW confidence — give the image
+      // a second opinion once; the model seeing the photo often upgrades it.
+      if (result.is_slip && result.confidence === 'low' && ocrText && !ocrLowQuality && !usedImageFallback) {
+        usedImageFallback = true;
+        parts = imageParts;
+        tryLog('warn', 'low_confidence_image_retry', 'retrying with image attached');
         attempt--;
         continue;
       }

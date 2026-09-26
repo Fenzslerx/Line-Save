@@ -12,7 +12,10 @@ import {
   saveCategoryRule,
   findCategoryRule,
   upsertContact,
-  findContact
+  findContact,
+  listSelfIdentities,
+  addSelfIdentity,
+  deleteSelfIdentity
 } from '../src/db/liff';
 
 function makeFakeD1(rows: any[] = [], firstRow: any = null) {
@@ -182,5 +185,33 @@ describe('LIFF Query Layer', () => {
     expect(db.calls[0].sql).toContain('type = ?');
     expect(db.calls[0].params).toEqual(['U1', 'นายสมชาย', 'income']);
     expect(contact).toEqual({ category: 'ขายของ', type: 'income', seen_count: 3 });
+  });
+
+  it('should manage owner identities (บัญชีของฉัน)', async () => {
+    // add: digit input normalizes to an acc:<last4> self row
+    const db = makeFakeD1();
+    const identity = await addSelfIdentity(db, 'U1', '123-456-7890');
+    expect(identity).toEqual({ name: 'acc:7890', kind: 'tail' });
+    expect(db.calls[0].sql).toContain('INSERT INTO contact_names');
+    expect(db.calls[0].params).toEqual(['U1', 'acc:7890', 'self', null]);
+
+    // add: plain name stored verbatim
+    const db2 = makeFakeD1();
+    const id2 = await addSelfIdentity(db2, 'U1', 'นายสมชาย ใจดี');
+    expect(id2).toEqual({ name: 'นายสมชาย ใจดี', kind: 'name' });
+
+    // list returns kinds
+    const db3 = makeFakeD1([{ name: 'acc:7890' }, { name: 'นายสมชาย ใจดี' }]);
+    const list = await listSelfIdentities(db3, 'U1');
+    expect(list).toEqual([
+      { name: 'acc:7890', kind: 'tail' },
+      { name: 'นายสมชาย ใจดี', kind: 'name' }
+    ]);
+
+    // delete: digit input targets the acc: row
+    const db4 = makeFakeD1();
+    await deleteSelfIdentity(db4, 'U1', '1234567890');
+    expect(db4.calls[0].sql).toContain("type = 'self'");
+    expect(db4.calls[0].params).toEqual(['U1', 'acc:7890']);
   });
 });

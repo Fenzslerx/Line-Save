@@ -196,7 +196,7 @@ describe('Vision LLM Slip Extraction Service (Gemini)', () => {
     config.typhoon.apiKey = 'test_typhoon_key';
     // No amount anywhere in the text — the rule parser bails and Gemini takes over
     const fetchMock = jest.fn().mockResolvedValue(new Response(
-      JSON.stringify({ choices: [{ message: { content: 'KBank\nรายการโอน\n23/09/2568 นายสมชาย' } }] }),
+      JSON.stringify({ choices: [{ message: { content: 'KBank\nรายการโอนเงินสำเร็จ\nวันที่ 23/09/2568 โดย นายสมชาย สาขาสยาม\nยืนยันรายการโอนเงินผ่านแอป K Plus เรียบร้อยแล้ว' } }] }),
       { status: 200 }
     ));
     global.fetch = fetchMock as any;

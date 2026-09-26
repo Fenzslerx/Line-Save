@@ -257,6 +257,29 @@ async function load() {
     '<div class="cols2">' +
     '<div>' +
     auditHtml +
+
+    (() => {
+      var dir = d.direction;
+      if (!dir) return '';
+      var RULE_TH = {
+        receipt: 'ใบเสร็จ/QR ร้าน', self_name: 'กฎชื่อตัวเอง', self_tail: 'กฎเลขท้ายบัญชี',
+        recurring_side: 'bootstrap ผู้ใหม่', payer_memory: 'จำคนโอนให้เรา', payee_memory: 'จำร้านที่จ่าย',
+        keyword: 'คำบนสลิป', default_expense: 'default', unknown: 'ไม่ระบุ'
+      };
+      var rows = (dir.byRule || []).map(function (x) {
+        var acc = x.saved > 0 ? Math.round((1 - x.corrected / x.saved) * 100) + '%' : '—';
+        var hot = x.saved >= 5 && x.corrected / Math.max(1, x.saved) > 0.2;
+        return '<tr><td><span class="tag">' + esc(RULE_TH[x.rule] || x.rule) + '</span></td>' +
+          '<td>' + fmtN(x.saved) + '</td><td>' + (x.corrected > 0 ? '<b style="color:var(--red)">' + fmtN(x.corrected) + '</b>' : '0') + '</td>' +
+          '<td>' + (hot ? '<b style="color:var(--red)">' : '') + acc + '</td></tr>';
+      }).join('');
+      var overall = dir.totalSaved > 0 ? Math.round((1 - dir.corrections / dir.totalSaved) * 100) + '%' : '—';
+      return '<h2>ความแม่นทิศทาง (30 วัน)</h2><div class="card">' +
+        '<div class="kv"><span>บันทึกอัตโนมัติ / ถูกแก้โดยผู้ใช้</span><b>' + fmtN(dir.totalSaved) + ' / ' + fmtN(dir.corrections) + '</b></div>' +
+        '<div class="kv"><span>ความแม่นรวม</span><b>' + overall + '</b></div>' +
+        (rows ? '<table style="margin-top:8px"><tr><th>กฎที่ตัดสิน</th><th>บันทึก</th><th>ถูกแก้</th><th>แม่น</th></tr>' + rows + '</table>' : '<div class="empty">ยังไม่มีข้อมูล</div>') +
+        '</div>';
+    })() +
     '</div>' +
     '<div>' +
     '<h2>Error ล่าสุด (30 รายการ)</h2>' +
@@ -283,6 +306,8 @@ var EV = {
   'internal_transfer': 'โอนข้ามบัญชี (ไม่บันทึก)', 'duplicate_detected': 'พบสลิปซ้ำ — ถามผู้ใช้',
   'self_rule_income': 'กฎชื่อตัวเอง → รายรับ', 'self_rule_expense': 'กฎชื่อตัวเอง → รายจ่าย',
   'tail_rule_income': 'กฎเลขบัญชี → รายรับ', 'tail_rule_expense': 'กฎเลขบัญชี → รายจ่าย',
+  'direction_correction': 'ผู้ใช้แก้ทิศทาง', 'ocr_low_quality': 'OCR เพี้ยน → ใช้รูปตรง',
+  'low_confidence_image_retry': 'มั่นใจต่ำ → ยิงรูปซ้ำ', 'identities_changed': 'แก้รายการบัญชีของฉัน',
   'dup_recent_batch_autosaved': 'สลิปชุดเดียวกัน — บันทึกเพิ่ม', 'contact_memory_income': 'จำชื่อคนโอน → รายรับ',
   'ocr_parser_hit': 'อ่านสลิปด้วยกฎ (ไม่ใช้ AI)', 'ocr_parser_miss': 'กฎอ่านไม่ได้ → ส่งต่อ AI',
   'gemini_call_ok': 'เรียก AI สำเร็จ', 'gemini_call_fail': 'เรียก AI ไม่สำเร็จ',

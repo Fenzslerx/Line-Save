@@ -31,6 +31,7 @@ import {
   logStage,
   cleanupOldSlipTracking
 } from '../observability/log';
+import { countCorrectionsFor } from '../db/metrics';
 import {
   createAutoSavedFlex,
   createSummaryFlex,
@@ -424,6 +425,8 @@ async function handleImageMessage(
     }, snapshot);
     extraction.direction = verdict.direction;
     if (verdict.counterparty) extraction.merchant = verdict.counterparty;
+    // Record which rule decided — the direction-accuracy panel aggregates this
+    extraction.direction_rule = verdict.rule;
     // Re-resolve the category only when the ladder changed the type — the
     // LLM's category is still valid when the direction agrees with its guess.
     if (verdict.direction !== keywordDirection) extraction.category = null;
@@ -508,7 +511,8 @@ async function handleImageMessage(
     type: saved.type,
     amount: saved.amount,
     category: saved.category,
-    confidence: extraction.confidence
+    confidence: extraction.confidence,
+    rule: extraction.direction_rule ?? null
   });
   logEvent(db, 'info', 'bot', 'slip_saved', `${saved.type} ฿${saved.amount} [${saved.category}] user=${hashUserId(userId)}${groupId ? ` in ${groupId}` : ''}`);
 
@@ -546,6 +550,24 @@ async function handleTextMessage(
 ) {
   const text = (event.message.text || '').trim();
   const replyToken = event.replyToken;
+
+  // Command: register the account owner's ACCOUNT NUMBER — the strongest
+  // direction signal (normalized to its last 4 digits, matching slip masks).
+  const accountNoMatch = text.match(/^(?:เลขบัญชี|เลขบัญชีธนาคาร)\s+([0-9xX×*\-\s]{4,})$/i);
+  if (accountNoMatch && userId) {
+    const digits = accountNoMatch[1].replace(/\D/g, '');
+    if (digits.length < 4) {
+      await replyLineMessage(replyToken, [{ type: 'text', text: 'เลขบัญชีต้องมีอย่างน้อย 4 หลักครับ' }]);
+      return;
+    }
+    const tail = digits.slice(-4);
+    const dbCmd = getD1();
+    await upsertContact(dbCmd, userId, 'acc:' + tail, 'self', null).catch(() => {});
+    await replyLineMessage(replyToken, [
+      { type: 'text', text: `จดจำเลขบัญชีที่ลงท้าย ${tail} แล้วครับ ✅\nสลิปที่เลขนี้อยู่ฝั่ง "ถึง" = รายรับ ฝั่ง "จาก" = รายจ่าย — ลงทะเบียนได้หลายบัญชี` }
+    ]);
+    return;
+  }
 
   // Command: register the account owner's printed name — the strongest signal
   // for income/expense direction ("ถึง <ชื่อนี้>" = money coming in).
@@ -703,7 +725,20 @@ async function handlePostback(
       // Re-send the saved card so the user sees the flip with the right color
       // (green for income, red for expense) and can toggle again if needed.
       const newCategory = fields.category ?? tx.category ?? 'อื่นๆ';
-      await replyLineMessage(replyToken, [
+      // Accuracy analytics: log which engine rule the user just overruled, and
+      // nudge registration when the same counterparty keeps getting corrected.
+      let nudge: string | null = null;
+      if (newType !== tx.type) {
+        const rule = (await getCachedExtraction(db, `msg:${msgId || 'x'}`).catch(() => null))?.direction_rule ?? null;
+        logEvent(db, 'info', 'bot', 'direction_correction', null, {
+          requestId,
+          data: { rule, from: tx.type, to: newType, name: tx.merchant ?? null }
+        });
+        if (await countCorrectionsFor(db, tx.merchant ?? '', 30) >= 2) {
+          nudge = 'ชื่อ/เลขนี้ถูกแก้ทิศทางบ่อย — พิมพ์ "ชื่อบัญชี <ชื่อ>" หรือ "เลขบัญชี <เลข>" เพื่อยืนยันตัวตนของคุณ ระบบจะแม่นขึ้นทันที';
+        }
+      }
+      const replyMessages: any[] = [
         createAutoSavedFlex({
           amount: tx.amount,
           merchant: tx.merchant ?? null,
@@ -713,7 +748,9 @@ async function handlePostback(
           txId: tx.id,
           messageId: msgId || null
         })
-      ]);
+      ];
+      if (nudge) replyMessages.push({ type: 'text', text: nudge });
+      await replyLineMessage(replyToken, replyMessages);
       return;
     }
 
@@ -753,6 +790,10 @@ async function handlePostback(
       if (newType === 'expense' && extraction.party_to) extraction.merchant = extraction.party_to;
       const saved = await saveSlipFromExtraction(db, userId, groupId, extraction);
       await setSlipStage(db, msgId, 'saved', 'done', userId);
+      logEvent(db, 'info', 'bot', 'direction_correction', null, {
+        requestId,
+        data: { rule: extraction.direction_rule ?? null, from: 'unconfirmed', to: newType, name: saved.merchant ?? null }
+      });
       if (newType === 'income') {
         for (const t of extraction.party_to_tails || []) {
           await upsertContact(db, userId, 'acc:' + t, 'self', null).catch(() => {});

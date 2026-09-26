@@ -190,4 +190,28 @@ describe('AI-free slip parser (rule-based, from Typhoon OCR text)', () => {
     const tails = parsePartyTails(text);
     expect(tails.from).toContain('7890');
   });
+
+  it('should keep KBank เข้าบัญชี tails on the TO side (the v1 misclassification bug)', () => {
+    // KBank prints the receiving side as "เข้าบัญชี" — v1 attached its tail to
+    // the FROM side, flipping every incoming slip to expense.
+    const text = [
+      'KBank โอนเงินสำเร็จ',
+      'จำนวนเงิน 1,000.00 บาท',
+      'จากบัญชี นายสมชาย x9999',
+      'เข้าบัญชี นายเจ้าของบัญชี x1234'
+    ].join('\n');
+    const tails = parsePartyTails(text);
+    expect(tails.from).toEqual(['9999']);
+    expect(tails.to).toEqual(['1234']);
+    const r = parseSlipFromOcr(text);
+    expect(r).not.toBeNull();
+    expect(r!.party_to_tails).toContain('1234');
+    expect(r!.party_from_tails).not.toContain('1234');
+  });
+
+  it('should not treat years as account tails on party lines', () => {
+    const text = 'จาก นายเอ วันที่ 26/09/2569 14:02';
+    const tails = parsePartyTails(text);
+    expect(tails.from).not.toContain('2569');
+  });
 });

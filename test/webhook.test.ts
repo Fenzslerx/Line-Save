@@ -344,7 +344,7 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
       .mockReturnValueOnce(makeMockD1([]))
       .mockReturnValueOnce(makeMockD1([]))
       .mockReturnValueOnce(
-        makeMockD1([], { U_TEST: [dupRow], 'img2:': [{ result_json: JSON.stringify(cached) }] })
+        makeMockD1([], { U_TEST: [dupRow], 'img3:': [{ result_json: JSON.stringify(cached) }] })
       );
 
     const repliesBefore = (replyLineMessage as jest.Mock).mock.calls.length;
@@ -734,7 +734,7 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
       .mockReturnValueOnce(makeMockD1([])) // first call: request log handle
       .mockReturnValueOnce(makeMockD1([])) // second call: auto-record user
       .mockReturnValueOnce(
-        makeMockD1([], { 'img2:': [{ result_json: JSON.stringify(cached) }] }) // msg dedup misses, image cache hits
+        makeMockD1([], { 'img3:': [{ result_json: JSON.stringify(cached) }] }) // msg dedup misses, image cache hits
       );
 
     const visionCallsBefore = (extractSlipInfo as jest.Mock).mock.calls.length;

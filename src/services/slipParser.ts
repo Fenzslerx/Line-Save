@@ -162,7 +162,9 @@ function detectDirection(text: string): 'income' | 'expense' | null {
 }
 
 const FROM_MARKERS = ['รับจาก', 'โอนโดย', 'ผู้โอน', 'จาก'];
-const TO_MARKERS = ['โอนไปที่', 'ไปยัง', 'โอนไป', 'ผู้รับ', 'ถึง', 'ร้าน', 'สาขา'];
+// 'เข้าบัญชี' is KBank's exact wording for the receiving side — missing it made
+// the owner's tail attach to the FROM side and flip incoming slips to expense.
+const TO_MARKERS = ['เข้าบัญชี', 'โอนไปที่', 'ไปยัง', 'โอนไป', 'ผู้รับ', 'ถึง', 'ร้าน', 'สาขา'];
 
 function cleanPartyName(raw: string): string | null {
   let value = raw.replace(/^[:\-\s]+/, '').trim();
@@ -213,7 +215,12 @@ export function parsePartyTails(text: string): { from: string[]; to: string[] } 
   const tailsOnLine = (line: string) => {
     const tails: string[] = [];
     for (const m of line.matchAll(/\b[xX×*](\d{3,4})\b/g)) tails.push(m[1]);
-    for (const m of line.matchAll(/\b\d{4,}\b/g)) tails.push(m[0].replace(/\D/g, '').slice(-4));
+    for (const m of line.matchAll(/\b\d{4,}\b/g)) {
+      const digits = m[0].replace(/\D/g, '').slice(-4);
+      // Skip year-like numbers (พ.ศ. 25xx / ค.ศ. 20xx) printed near party lines
+      if (/^(25[0-9][0-9]|20[0-9][0-9])$/.test(m[0])) continue;
+      tails.push(digits);
+    }
     return tails;
   };
   let pendingSide: 'from' | 'to' | null = null;
@@ -247,9 +254,9 @@ export function parseCounterparty(text: string, direction: 'income' | 'expense' 
   const markers = direction === 'income'
     ? ['รับจาก', 'โอนโดย', 'ผู้โอน', 'จาก']
     : direction === 'expense'
-      ? ['โอนไปที่', 'ไปยัง', 'โอนไป', 'ผู้รับ', 'ถึง', 'ร้าน', 'สาขา']
+      ? ['เข้าบัญชี', 'โอนไปที่', 'ไปยัง', 'โอนไป', 'ผู้รับ', 'ถึง', 'ร้าน', 'สาขา']
       // Unknown direction — receiver-side names are the most useful merchant guess
-      : ['โอนไปที่', 'ไปยัง', 'โอนไป', 'ผู้รับ', 'ถึง', 'ร้าน', 'สาขา', 'จาก'];
+      : ['เข้าบัญชี', 'โอนไปที่', 'ไปยัง', 'โอนไป', 'ผู้รับ', 'ถึง', 'ร้าน', 'สาขา', 'จาก'];
   const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean);
   let latinFallback: string | null = null;
   for (let i = lines.length - 1; i >= 0; i--) {

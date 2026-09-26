@@ -80,4 +80,22 @@ describe('AI-free slip parser (rule-based, from Typhoon OCR text)', () => {
     expect(r).not.toBeNull();
     expect(r!.date).toBeNull(); // future date dropped, everything else parses
   });
+
+  it('should parse Thai month dates without a space before a 2-digit BE year', () => {
+    expect(parseThaiDate('โอนสำเร็จ 15 มิ.ย.68 09:30')).toBe('2025-06-15');
+  });
+
+  it('should parse full Thai month names', () => {
+    expect(parseThaiDate('วันที่ 3 มกราคม 2569')).toBe('2026-01-03');
+  });
+
+  it('should assume the current year when a month-name date omits it', () => {
+    const now = new Date();
+    const expected = `${now.getFullYear()}-09-05`;
+    expect(parseThaiDate('รายการ 5 ก.ย. จำนวน 20 บาท')).toBe(expected);
+  });
+
+  it('should parse ISO dates printed on slips', () => {
+    expect(parseThaiDate('วันที่ 2026-09-23 12:00')).toBe('2026-09-23');
+  });
 });

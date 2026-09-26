@@ -43,6 +43,15 @@ export interface SummaryData {
  * and recorded — zero interaction required. The single button opens the LIFF
  * dashboard where the user can review or edit the entry.
  */
+const THAI_MONTHS_ABBR = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+
+/** "2025-09-23" → "23 ก.ย. 2568"; non-date strings pass through untouched. */
+function thaiDate(ds: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ds);
+  if (!m) return ds;
+  return `${+m[3]} ${THAI_MONTHS_ABBR[+m[2] - 1]} ${+m[1] + 543}`;
+}
+
 export function createAutoSavedFlex(data: AutoSavedData): messagingApi.FlexMessage {
   const isIncome = data.type === 'income';
   const liffUrl = config.liffId ? `https://liff.line.me/${config.liffId}` : null;
@@ -78,7 +87,7 @@ export function createAutoSavedFlex(data: AutoSavedData): messagingApi.FlexMessa
     { type: 'separator', margin: 'md', color: '#E8EAED' },
     row('หมวดหมู่', data.category),
     row('ร้านค้า/ผู้รับ', data.merchant || 'ไม่ระบุ'),
-    row('วันที่ทำรายการ', data.date)
+    row('วันที่บนสลิป', thaiDate(data.date))
   ];
   if (data.txId) {
     bodyContents.push(row('รหัสอ้างอิง', '#' + data.txId.replace(/-/g, '').slice(0, 8).toUpperCase()));
@@ -207,7 +216,7 @@ export function createDuplicateSlipFlex(data: DuplicateSlipData): messagingApi.F
           row('จำนวนเงิน', baht(data.existing.amount)),
           row('หมวดหมู่', data.existing.category),
           row('ร้านค้า/ผู้รับ', data.existing.merchant || 'ไม่ระบุ'),
-          row('วันที่', data.existing.date),
+          row('วันที่บนสลิป', thaiDate(data.existing.date)),
           { type: 'separator', margin: 'md' },
           {
             type: 'text',

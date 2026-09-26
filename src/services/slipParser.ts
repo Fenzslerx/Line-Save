@@ -46,20 +46,33 @@ function futureDate(date: string): boolean {
   return isNaN(ts) || ts > Date.now() + 2 * 24 * 60 * 60 * 1000;
 }
 
-/** "15/06/2568", "2026-09-23", "15 ก.ย. 2569" — first plausible date near "วันที่" wins. */
+/** Current year in ThaiBE-insensitive terms — used when a month-name date omits the year. */
+function defaultYear(): number {
+  return new Date().getFullYear();
+}
+
+/** "15/06/2568", "2026-09-23", "15 ก.ย. 2569", "15 มิ.ย.68" — first plausible date wins. */
 export function parseThaiDate(text: string): string | null {
-  // Thai month-name dates
+  // Thai month-name dates (ปี พ.ศ. 4 หลัก / 2 หลัก / หรือไม่มีปีเลย)
   for (const [monRe, month] of THAI_MONTHS) {
-    const re = new RegExp(`(\\d{1,2})\\s+(${monRe.source})[a-zก-๙]*\\.?\\s+(\\d{2,4})`, 'i');
+    const re = new RegExp(`(\\d{1,2})\\s+(${monRe.source})[a-zก-๙]*\\.?\\s*(\\d{2,4})?`, 'i');
     const m = re.exec(text);
     if (m) {
       const day = +m[1];
-      const year = toGregorianYear(+m[3]);
+      const rawYear = m[3] ? +m[3] : null;
+      const year = rawYear === null
+        ? defaultYear()
+        : toGregorianYear(m[3]!.length === 2 ? 2500 + rawYear : rawYear);
       const date = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
       if (day >= 1 && day <= 31 && !futureDate(date)) return date;
+      // A missing year that lands in the future belongs to last year
+      if (day >= 1 && day <= 31 && futureDate(date) && !m[3]) {
+        const lastYear = `${year - 1}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        if (!futureDate(lastYear)) return lastYear;
+      }
     }
   }
-  // Numeric dates — pick the candidate closest to "วันที่" when several exist
+  // Numeric dates — pick the candidate whose preceding text contains "วันที่"
   const candidates: { date: string; pos: number }[] = [];
   const re = /(\d{1,4})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/g;
   let m: RegExpExecArray | null;

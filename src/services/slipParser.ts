@@ -201,27 +201,41 @@ export function parseParties(text: string): { from: string | null; to: string | 
 }
 
 /**
- * Account-tail signatures printed next to each party ("บัญชีออมทรัพย์ x1234",
- * "KBank x5678", "123-4-56789-0"). Digits never OCR-garble the way Thai names
- * do, and the OWNER's tail is constant across every slip from their phone —
- * the strongest direction signal in the system. Tails are normalized to the
- * LAST 4 digits so masked (`x1234`) and full numbers interoperate.
+ * Account-tail signatures per party side. v2: the account number is often on
+ * its OWN line under the party label ("โอนไปที่ นายสมชาย\nKTB : x1234") —
+ * attach continuation lines to the nearest preceding marker side. Bare
+ * continuation numbers are accepted only as masked tails (x1234) or full
+ * 10–12 digit accounts, so 15+ digit reference numbers never attach.
  */
 export function parsePartyTails(text: string): { from: string[]; to: string[] } {
   const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean);
-  const tailsOn = (markers: string[]): string[] => {
-    const out: string[] = [];
-    for (const line of lines) {
-      if (!markers.some(m => line.includes(m))) continue;
-      for (const m of line.matchAll(/\b[xX×*](\d{3,4})\b/g)) out.push(m[1]);
-      for (const m of line.matchAll(/\b\d{4,}\b/g)) {
-        const digits = m[0].replace(/\D/g, '');
-        out.push(digits.slice(-4));
-      }
-    }
-    return [...new Set(out)];
+  const out = { from: [] as string[], to: [] as string[] };
+  const tailsOnLine = (line: string) => {
+    const tails: string[] = [];
+    for (const m of line.matchAll(/\b[xX×*](\d{3,4})\b/g)) tails.push(m[1]);
+    for (const m of line.matchAll(/\b\d{4,}\b/g)) tails.push(m[0].replace(/\D/g, '').slice(-4));
+    return tails;
   };
-  return { from: tailsOn(FROM_MARKERS), to: tailsOn(TO_MARKERS) };
+  let pendingSide: 'from' | 'to' | null = null;
+  for (const line of lines) {
+    const isFrom = FROM_MARKERS.some(m => line.includes(m));
+    const isTo = !isFrom && TO_MARKERS.some(m => line.includes(m));
+    if (isFrom || isTo) {
+      pendingSide = isFrom ? 'from' : 'to';
+      for (const t of tailsOnLine(line)) out[pendingSide].push(t);
+      continue;
+    }
+    if (!pendingSide) continue;
+    // Continuation line: masked tail or full account number only
+    const masked = [...line.matchAll(/\b[xX×*](\d{3,4})\b/g)].map(m => m[1]);
+    const full = [...line.matchAll(/\b(\d{10,12})\b/g)].map(m => m[1].slice(-4));
+    const tails = [...masked, ...full];
+    if (tails.length) {
+      for (const t of tails) out[pendingSide].push(t);
+      pendingSide = null; // consumed — a later bare number belongs to nobody
+    }
+  }
+  return { from: [...new Set(out.from)], to: [...new Set(out.to)] };
 }
 
 /**
@@ -229,10 +243,13 @@ export function parsePartyTails(text: string): { from: string[]; to: string[] } 
  * bottom-up scan: on Thai slips the "จาก/ถึง" block sits near the bottom, so
  * the last matching line is the real party — not a header mention.
  */
-export function parseCounterparty(text: string, direction: 'income' | 'expense'): string | null {
+export function parseCounterparty(text: string, direction: 'income' | 'expense' | null): string | null {
   const markers = direction === 'income'
     ? ['รับจาก', 'โอนโดย', 'ผู้โอน', 'จาก']
-    : ['โอนไปที่', 'ไปยัง', 'โอนไป', 'ผู้รับ', 'ถึง', 'ร้าน', 'สาขา'];
+    : direction === 'expense'
+      ? ['โอนไปที่', 'ไปยัง', 'โอนไป', 'ผู้รับ', 'ถึง', 'ร้าน', 'สาขา']
+      // Unknown direction — receiver-side names are the most useful merchant guess
+      : ['โอนไปที่', 'ไปยัง', 'โอนไป', 'ผู้รับ', 'ถึง', 'ร้าน', 'สาขา', 'จาก'];
   const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean);
   let latinFallback: string | null = null;
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -263,7 +280,7 @@ const EXPENSE_CATEGORY_HINTS: [string, string[]][] = [
   ['ของใช้ทั่วไป', ['7-eleven', 'เซเว่น', 'ซีเว่น', 'lotus', 'บิ๊กซี', 'makro', 'วัตสัน', 'watsons', 'shopee', 'lazada', 'tiktok shop', 'ร้านยา', 'ฟาร์มา', 'ยา', 'เครื่องใช้', 'ห้าง', 'ตลาดนัด', 'ร้านค้า']]
 ];
 
-function parseCategory(text: string, direction: 'income' | 'expense', merchant: string | null): string {
+function parseCategory(text: string, direction: 'income' | 'expense' | null, merchant: string | null): string {
   if (direction === 'income') {
     const t = (merchant || '') + ' ' + text;
     if (/เงินเดือน|salary|โบนัส|bonus|ค่าคอม/i.test(t)) return 'เงินเดือน';
@@ -287,7 +304,10 @@ export function parseSlipFromOcr(ocrText: string): SlipExtractionResult | null {
 
   const amount = parseAmount(ocrText) ?? parseBareAmount(ocrText);
   const direction = detectDirection(ocrText);
-  if (amount === null || amount <= 0 || !direction) return null;
+  // v2: keyword direction is only a weak signal (L5) — the ladder in the
+  // webhook decides instead, so slips with an amount but no keywords no
+  // longer pay for Gemini.
+  if (amount === null || amount <= 0) return null;
 
   const date = parseThaiDate(ocrText);
   const merchant = parseCounterparty(ocrText, direction);

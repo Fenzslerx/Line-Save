@@ -1,5 +1,6 @@
 import { D1Database } from './client';
 import { SlipExtractionResult } from '../services/vision';
+import { normalizeName, tail4 } from '../services/direction';
 
 export interface UserRecord {
   line_user_id: string;
@@ -280,4 +281,42 @@ export async function saveExtractionCache(
     )
     .bind(hash, JSON.stringify(result), Math.floor(Date.now() / 1000))
     .run();
+}
+
+/** Observational history for the cold-start bootstrap — written on EVERY save. */
+export async function recordSlipParties(
+  db: D1Database, userId: string, txId: string,
+  from: string | null, to: string | null, fromTails: string[], toTails: string[]
+): Promise<void> {
+  const rows: [string, string | null, string | null][] = [];
+  const push = (side: 'from' | 'to', name: string | null, tails: string[]) => {
+    const n = normalizeName(name || '');
+    if (n) rows.push([side, n, null]);
+    for (const t of new Set(tails.map(tail4).filter(x => x.length === 4))) rows.push([side, null, t]);
+  };
+  push('from', from, fromTails);
+  push('to', to, toTails);
+  if (!rows.length || !txId) return;
+  await db.batch(rows.map(([side, n, t]) =>
+    db.prepare('INSERT INTO slip_parties (user_id, tx_id, side, name_norm, tail) VALUES (?, ?, ?, ?, ?)')
+      .bind(userId, txId, side, n, t)));
+}
+
+/**
+ * Atomic claim of a LINE message id BEFORE downloading the image — burst slips
+ * and LINE redeliveries can no longer race past the old post-hoc msg: check.
+ * The claim row expires in 10 minutes (created_at backdated 23h50m) so a
+ * crashed pipeline still recovers on the next redelivery.
+ */
+export async function claimMessage(db: D1Database, messageId: string): Promise<boolean> {
+  const now = Math.floor(Date.now() / 1000);
+  const claimTs = now - (24 * 3600 - 600); // TTL window leaves 10 minutes
+  const res = await db
+    .prepare(
+      `INSERT INTO slip_dedup_cache (hash, result_json, created_at)
+       VALUES (?, '{}', ?) ON CONFLICT(hash) DO NOTHING`
+    )
+    .bind(`msg:${messageId}`, claimTs)
+    .run();
+  return Boolean((res as any).meta?.changes);
 }

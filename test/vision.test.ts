@@ -194,9 +194,9 @@ describe('Vision LLM Slip Extraction Service (Gemini)', () => {
 
   it('should pass Typhoon OCR text to Gemini when the key is configured', async () => {
     config.typhoon.apiKey = 'test_typhoon_key';
-    // No direction keyword in the text — the rule parser bails and Gemini takes over
+    // No amount anywhere in the text — the rule parser bails and Gemini takes over
     const fetchMock = jest.fn().mockResolvedValue(new Response(
-      JSON.stringify({ choices: [{ message: { content: 'KBank\nยอดเงิน 350.50 บาท\n23/09/2568 นายสมชาย' } }] }),
+      JSON.stringify({ choices: [{ message: { content: 'KBank\nรายการโอน\n23/09/2568 นายสมชาย' } }] }),
       { status: 200 }
     ));
     global.fetch = fetchMock as any;
@@ -219,7 +219,7 @@ describe('Vision LLM Slip Extraction Service (Gemini)', () => {
     expect(contents[0].parts).toHaveLength(1);
     const promptText = contents[0].parts[0].text;
     expect(promptText).toContain('OCR text below was extracted from a photo');
-    expect(promptText).toContain('ยอดเงิน 350.50');
+    expect(promptText).toContain('นายสมชาย');
     expect(contents[0].parts[0].inlineData).toBeUndefined();
     // Deterministic extraction settings
     const requestConfig = promptSpy.mock.calls[0][0].config;

@@ -15,9 +15,12 @@ import {
   getCachedExtraction,
   saveExtractionCache,
   findDuplicateSlip,
-  getTransactionById
+  getTransactionById,
+  claimMessage,
+  recordSlipParties
 } from '../db/queries';
-import { findCategoryRule, updateTransaction, upsertContact, findContact, getOwnNames } from '../db/liff';
+import { findCategoryRule, updateTransaction, upsertContact, findContact, loadDirectionMemory, unlearnSelf } from '../db/liff';
+import { decideDirection, isInternalTransfer, bkkToday, emptyMemory, MemorySnapshot, DirectionVerdict } from '../services/direction';
 import { logEvent } from '../db/events';
 import {
   hashUserId,
@@ -98,14 +101,15 @@ async function saveSlipFromExtraction(
   userId: string,
   groupId: string | null,
   extraction: SlipExtractionResult,
-  precomputedCategory?: string
+  precomputedCategory?: string,
+  learnSelf = false   // true เฉพาะเมื่อ verdict.learnable หรือผู้ใช้กดแก้ (ground truth)
 ): Promise<TransactionRecord> {
   if (extraction.amount === null || extraction.amount === undefined) {
     throw new Error('slip amount missing');
   }
   const txType: 'income' | 'expense' = extraction.direction === 'income' ? 'income' : 'expense';
   const category = precomputedCategory ?? (await resolveSlipCategory(db, userId, extraction.merchant, extraction.category, txType));
-  const txDate = extraction.date || new Date().toISOString().split('T')[0];
+  const txDate = extraction.date || bkkToday();
   const saved = await createTransaction(db, {
     line_user_id: userId,
     line_group_id: groupId,
@@ -116,126 +120,35 @@ async function saveSlipFromExtraction(
     date: txDate
   });
   if (saved.id) {
-    // Learn the owner's identifiers: printed names AND account-tail signatures.
-    // On outgoing slips the owner is the "จาก" side; on incoming ones the "ถึง" side.
-    if (txType === 'expense') {
-      for (const t of extraction.party_from_tails || []) {
-        await upsertContact(db, userId, 'acc:' + t, 'self', null).catch(() => {});
-      }
-      if (extraction.party_from) {
-        await upsertContact(db, userId, extraction.party_from, 'self', null).catch(() => {});
-      }
-    } else {
-      for (const t of extraction.party_to_tails || []) {
-        await upsertContact(db, userId, 'acc:' + t, 'self', null).catch(() => {});
-      }
-      if (extraction.party_to) {
-        await upsertContact(db, userId, extraction.party_to, 'self', null).catch(() => {});
+    // Learn the owner's identifiers (printed names AND account-tail signatures)
+    // ONLY from provable verdicts or user corrections — keyword/default guesses
+    // must never poison the self registry (v1's memory-poison bug).
+    if (learnSelf) {
+      if (txType === 'expense') {
+        for (const t of extraction.party_from_tails || []) {
+          await upsertContact(db, userId, 'acc:' + t, 'self', null).catch(() => {});
+        }
+        if (extraction.party_from) {
+          await upsertContact(db, userId, extraction.party_from, 'self', null).catch(() => {});
+        }
+      } else {
+        for (const t of extraction.party_to_tails || []) {
+          await upsertContact(db, userId, 'acc:' + t, 'self', null).catch(() => {});
+        }
+        if (extraction.party_to) {
+          await upsertContact(db, userId, extraction.party_to, 'self', null).catch(() => {});
+        }
       }
     }
     if (extraction.merchant) {
       await upsertContact(db, userId, extraction.merchant, txType, category).catch(() => {});
     }
+    await recordSlipParties(db, userId, saved.id,
+      extraction.party_from ?? null, extraction.party_to ?? null,
+      extraction.party_from_tails || [], extraction.party_to_tails || []
+    ).catch(() => {});
   }
   return saved;
-}
-
-/** Account-tail identifiers live in contact_names as `acc:<last4>` self-entries. */
-function getOwnTails(ownNames: Set<string>): Set<string> {
-  const tails = new Set<string>();
-  for (const n of ownNames) {
-    if (n.startsWith('acc:')) tails.add(n.slice(4));
-  }
-  return tails;
-}
-
-/**
- * Direction inference from the contact memory, in priority order:
- *   1. TO side is the account owner's own name → the money is coming IN
- *      (screenshots of other people's transfers say "โอนสำเร็จ" — the keyword
- *      would mislabel them as expense).
- *   2. FROM side is the owner's own name → outgoing, confirms expense.
- *   3. Account-tail match: a tail the owner's slips always print, sitting on
- *      the ถึง side → income; on the จาก side → expense. Digits never garble
- *      like names, so this is the most deterministic signal.
- *   4. A name remembered as an INCOME payer sits in the FROM position → income.
- * Returns the corrected direction + counterparty + which rule decided it
- * (self/tail rules are authoritative; payer memory is strong), or null to keep
- * the keyword guess.
- */
-async function inferDirectionFromMemory(
-  db: D1Database,
-  userId: string,
-  extraction: SlipExtractionResult
-): Promise<{ direction: 'income' | 'expense'; merchant: string | null; bySelf: boolean } | null> {
-  const from = extraction.party_from;
-  const to = extraction.party_to;
-  const fromTails = extraction.party_from_tails || [];
-  const toTails = extraction.party_to_tails || [];
-  if (!from && !to && fromTails.length === 0 && toTails.length === 0) return null;
-
-  const own = await getOwnNames(db, userId);
-  const ownTails = getOwnTails(own);
-  const isOwn = (n: string | null | undefined) => {
-    if (!n) return false;
-    for (const o of own) if (isInternalTransfer(o, n)) return true;
-    return false;
-  };
-  const fromOwn = isOwn(from);
-  const toOwn = isOwn(to);
-
-  if (toOwn && !fromOwn && from) {
-    logEvent(db, 'info', 'bot', 'self_rule_income', null, {});
-    return { direction: 'income', merchant: from, bySelf: true };
-  }
-  if (fromOwn && !toOwn) {
-    logEvent(db, 'info', 'bot', 'self_rule_expense', null, {});
-    return { direction: 'expense', merchant: extraction.merchant ?? to ?? null, bySelf: true };
-  }
-
-  // Account-tail signature — deterministic even when names OCR badly
-  if (ownTails.size > 0) {
-    if (toTails.some(t => ownTails.has(t)) && from && !fromTails.some(t => ownTails.has(t))) {
-      logEvent(db, 'info', 'bot', 'tail_rule_income', `tails=${toTails.join(',')}`);
-      return { direction: 'income', merchant: from, bySelf: true };
-    }
-    if (fromTails.some(t => ownTails.has(t)) && !toTails.some(t => ownTails.has(t))) {
-      logEvent(db, 'info', 'bot', 'tail_rule_expense', `tails=${fromTails.join(',')}`);
-      return { direction: 'expense', merchant: extraction.merchant ?? to ?? null, bySelf: true };
-    }
-  }
-
-  if (from) {
-    const payer = await findContact(db, userId, from, 'income').catch(() => null);
-    if (payer && payer.seen_count >= 1) {
-      logEvent(db, 'info', 'bot', 'contact_memory_income', `seen=${payer.seen_count}`);
-      return { direction: 'income', merchant: from, bySelf: false };
-    }
-  }
-  return null;
-}
-
-function normalizeName(name: string): string {
-  let n = String(name || '');
-  let prev = '';
-  // Strip titles repeatedly (ว่าที่ ร.ต. อ., นายสมชาย, คุณสมชาย ...)
-  while (n !== prev) {
-    prev = n;
-    n = n.replace(/^(ว่าที่|นาย|นางสาว|นาง|ด\.ต\.|จ\.อ\.|ร\.ต\.|ส\.อ\.|พ\.ต\.|ม\.ล\.|ม\.จ\.|คุณ)\s*/i, '');
-  }
-  n = n.replace(/[\s.:\-]/g, '').toLowerCase();
-  return n.trim();
-}
-
-/** Same party on both sides of a transfer slip → internal (own-account) transfer. */
-function isInternalTransfer(a: string, b: string): boolean {
-  const na = normalizeName(a);
-  const nb = normalizeName(b);
-  if (!na || !nb) return false;
-  if (na === nb) return true;
-  const short = na.length <= nb.length ? na : nb;
-  const long = na.length <= nb.length ? nb : na;
-  return short.length >= 4 && long.includes(short);
 }
 
 /**
@@ -399,10 +312,18 @@ async function handleImageMessage(
   }
 
   if (db) {
+    // Old-format rows from v1 (a real cached extraction) still short-circuit;
+    // a fresh claim '{}' within 10 min means a concurrent twin is processing.
     const seen = await getCachedExtraction(db, `msg:${messageId}`).catch(() => null);
-    if (seen) {
+    if (seen && seen.is_slip !== undefined) {
       console.log(`[Slip Detection] Message ${messageId} already processed. Skipping duplicate.`);
       await finishRequest(db, requestId, 'ignored', Date.now() - requestStart, 'duplicate');
+      return;
+    }
+    const claimed = await claimMessage(db, messageId).catch(() => true);
+    if (!claimed) {
+      console.log(`[Slip Detection] Message ${messageId} is being processed concurrently. Skipping.`);
+      await finishRequest(db, requestId, 'ignored', Date.now() - requestStart, 'concurrent');
       return;
     }
   }
@@ -468,9 +389,11 @@ async function handleImageMessage(
   }
 
   // Rule 1: same name printed on both sides (จาก = ถึง) → own-account transfer.
-  // Not income and not expense — skip saving entirely.
+  // v2: exact normalized equality or a shared account tail — similar names alone
+  // no longer skip (father→son false positives).
   if (extraction.party_from && extraction.party_to &&
-      isInternalTransfer(extraction.party_from, extraction.party_to)) {
+      isInternalTransfer(extraction.party_from, extraction.party_to,
+        extraction.party_from_tails || [], extraction.party_to_tails || [])) {
     await setSlipStage(db, messageId, 'skipped', 'done', userId);
     logStage(db, requestId, 'internal_transfer', { party: hashUserId(extraction.party_from) });
     console.log(`[Slip Detection] [${requestId}] Internal transfer — not saved.`);
@@ -486,12 +409,24 @@ async function handleImageMessage(
     return;
   }
 
-  // Rule 2: memory-based direction — own-name roles and remembered payers.
-  const memoryDirection = db ? await inferDirectionFromMemory(db, userId, extraction) : null;
-  if (memoryDirection) {
-    extraction.direction = memoryDirection.direction;
-    extraction.merchant = memoryDirection.merchant ?? extraction.merchant;
-    extraction.category = null; // let the category chain re-resolve for the new type
+  // Rule 2: direction ladder v2 — memory first, keyword only as a weak fallback.
+  let verdict: DirectionVerdict | null = null;
+  if (db) {
+    const keywordDirection = extraction.direction;
+    const snapshot: MemorySnapshot = await loadDirectionMemory(db, userId).catch(() => emptyMemory());
+    verdict = decideDirection({
+      amount: extraction.amount ?? 0,
+      keywordDirection,
+      partyFrom: extraction.party_from ?? null,
+      partyTo: extraction.party_to ?? null,
+      fromTails: extraction.party_from_tails || [],
+      toTails: extraction.party_to_tails || []
+    }, snapshot);
+    extraction.direction = verdict.direction;
+    if (verdict.counterparty) extraction.merchant = verdict.counterparty;
+    // Re-resolve the category only when the ladder changed the type — the
+    // LLM's category is still valid when the direction agrees with its guess.
+    if (verdict.direction !== keywordDirection) extraction.category = null;
   }
   await markStage('extracted');
   console.log('[Slip Detection] Vision Result:', extraction);
@@ -504,7 +439,7 @@ async function handleImageMessage(
     return;
   }
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = bkkToday();
   const txDate = extraction.date || todayStr;
   const txType: 'income' | 'expense' = extraction.direction === 'income' ? 'income' : 'expense';
 
@@ -566,7 +501,7 @@ async function handleImageMessage(
 
   // Auto-save immediately — no category picker, no user interaction required
   await markStage('saving');
-  const saved = await saveSlipFromExtraction(saveDb, userId, groupId, extraction, category);
+  const saved = await saveSlipFromExtraction(saveDb, userId, groupId, extraction, category, verdict?.learnable ?? false);
   await setSlipStage(db, messageId, 'saved', 'done', userId);
   console.log(`[Slip Detection] Auto-saved: ${saved.type} ฿${saved.amount} [${saved.category}]`);
   logStage(db, requestId, 'slip_saved', {
@@ -742,6 +677,13 @@ async function handlePostback(
       if (msgId) {
         const extraction = await getCachedExtraction(db, `msg:${msgId}`).catch(() => null);
         if (extraction && extraction.is_slip) {
+          // Ground truth from the user: anything the wrong guess taught as 'self'
+          // on the now-disproven side must be unlearned, not just overridden.
+          if (newType === 'income') {
+            await unlearnSelf(db, userId, [extraction.party_from ?? ''], extraction.party_from_tails || []);
+          } else {
+            await unlearnSelf(db, userId, [extraction.party_to ?? ''], extraction.party_to_tails || []);
+          }
           const finalCategory = fields.category ?? txCategory;
           if (newType === 'income') {
             for (const t of extraction.party_to_tails || []) {
@@ -797,6 +739,13 @@ async function handlePostback(
         return;
       }
       await saveExtractionCache(db, `saved:${msgId}`, extraction).catch(() => {});
+
+      // Ground truth from the user: unlearn the disproven side's self rows first.
+      if (newType === 'income') {
+        await unlearnSelf(db, userId, [extraction.party_from ?? ''], extraction.party_from_tails || []);
+      } else {
+        await unlearnSelf(db, userId, [extraction.party_to ?? ''], extraction.party_to_tails || []);
+      }
 
       // The user's verdict IS the ground truth — apply it and teach the memory
       extraction.direction = newType;
@@ -856,7 +805,7 @@ async function handlePostback(
         userId,
         amount: extraction.amount,
         type: extraction.direction === 'income' ? 'income' : 'expense',
-        date: extraction.date || new Date().toISOString().split('T')[0],
+        date: extraction.date || bkkToday(),
         merchant: extraction.merchant
       }).catch(() => null);
       if (dup) {

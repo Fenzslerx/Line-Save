@@ -1,4 +1,5 @@
 import { D1Database } from './client';
+import { MemorySnapshot, tail4 } from '../services/direction';
 
 export interface LiffTransaction {
   id: string;
@@ -228,9 +229,9 @@ export async function findContact(
     .prepare('SELECT category, type, seen_count FROM contact_names WHERE user_id = ? AND name = ? AND type = ?')
     .bind(userId, name, type)
     .first();
-  if (!row || row.category == null) return null;
+  if (!row) return null;
   return {
-    category: String(row.category),
+    category: String(row.category ?? ''),
     type: row.type as ContactRole,
     seen_count: Number(row.seen_count ?? 1)
   };
@@ -307,4 +308,55 @@ function mapTransaction(row: any): LiffTransaction {
     date: String(row.date),
     source: String(row.source ?? 'manual')
   };
+}
+
+/** One query round per slip: roles + cold-start frequency stats. */
+export async function loadDirectionMemory(db: D1Database, userId: string): Promise<MemorySnapshot> {
+  const snap: MemorySnapshot = { selfNames: [], selfTails: new Set(), payerNames: [], payeeNames: [], sideStats: [] };
+  const contacts = await db
+    .prepare("SELECT name, type FROM contact_names WHERE user_id = ? AND type IN ('self','income','expense')")
+    .bind(userId).all();
+  for (const r of contacts.results || []) {
+    const name = String(r.name);
+    if (r.type === 'self') {
+      if (name.startsWith('acc:')) snap.selfTails.add(name.slice(4));
+      else if (name) snap.selfNames.push(name);
+    } else if (r.type === 'income') snap.payerNames.push(name);
+    else snap.payeeNames.push(name);
+  }
+  try {
+    const stats = await db.prepare(
+      `SELECT a.side AS side,
+              CASE WHEN COALESCE(a.name_norm,'') != '' THEN 'n:' || a.name_norm ELSE 't:' || a.tail END AS key,
+              COUNT(DISTINCT a.tx_id) AS distinctTx,
+              COUNT(DISTINCT CASE WHEN COALESCE(b.name_norm,'') != '' THEN 'n:' || b.name_norm
+                                  ELSE 't:' || b.tail END) AS distinctCounterparties
+       FROM slip_parties a
+       JOIN slip_parties b ON b.tx_id = a.tx_id AND b.side != a.side
+            AND (COALESCE(b.name_norm,'') != '' OR b.tail IS NOT NULL)
+       WHERE a.user_id = ?
+       GROUP BY a.side, key`
+    ).bind(userId).all();
+    for (const r of stats.results || []) {
+      snap.sideStats.push({
+        side: r.side === 'to' ? 'to' : 'from',
+        key: String(r.key),
+        distinctTx: Number(r.distinctTx),
+        distinctCounterparties: Number(r.distinctCounterparties)
+      });
+    }
+  } catch { /* slip_parties not migrated yet — bootstrap stays off */ }
+  return snap;
+}
+
+/** Remove 'self' rows proven wrong by a user correction (names + acc: tails). */
+export async function unlearnSelf(db: D1Database, userId: string, names: string[], tails: string[]): Promise<void> {
+  const targets = names.filter(Boolean).map(String)
+    .concat(tails.filter(Boolean).map(t => 'acc:' + tail4(String(t))));
+  if (!targets.length) return;
+  await db.batch(
+    targets.map(n =>
+      db.prepare("DELETE FROM contact_names WHERE user_id = ? AND type = 'self' AND name = ?")
+        .bind(userId, n))
+  ).catch(() => {});
 }

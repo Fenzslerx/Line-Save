@@ -63,8 +63,11 @@ describe('AI-free slip parser (rule-based, from Typhoon OCR text)', () => {
     expect(parseSlipFromOcr('แมวส้มอ้วนน่ารักมาก นอนทั้งวัน')).toBeNull();
   });
 
-  it('should return null when there is an amount but no direction keyword', () => {
-    expect(parseSlipFromOcr('สวัสดีครับ 50 บาท')).toBeNull();
+  it('should parse an amount without a direction keyword (ladder v2 decides later)', () => {
+    const r = parseSlipFromOcr('สวัสดีครับ 50 บาท')!;
+    expect(r).not.toBeNull();
+    expect(r.amount).toBe(50);
+    expect(r.direction).toBeNull(); // weak signal — the ladder decides instead
   });
 
   it('should map fuel to การเดินทาง and utilities to บิลและสาธารณูปโภค', () => {

@@ -19,7 +19,7 @@ function makeMockD1(selectRows: any[] = [], firstByParamPrefix?: Record<string, 
         const prefixMatch = prefixMap ? Object.keys(prefixMap).find(k => p0.startsWith(k)) : undefined;
         const rows = prefixMatch && prefixMap ? prefixMap[prefixMatch] : selectRows;
         return {
-          run: jest.fn().mockResolvedValue({ success: true }),
+          run: jest.fn().mockResolvedValue({ success: true, meta: { changes: 1 } }),
           all: jest.fn().mockResolvedValue({ results: rows, success: true }),
           first: jest.fn().mockResolvedValue(rows[0] ?? null)
         };
@@ -43,7 +43,10 @@ jest.mock('../src/db/liff', () => ({
   updateTransaction: jest.fn().mockResolvedValue(true),
   findContact: jest.fn().mockResolvedValue(null),
   upsertContact: jest.fn().mockResolvedValue(undefined),
-  getOwnNames: jest.fn().mockResolvedValue(new Set())
+  loadDirectionMemory: jest.fn().mockResolvedValue({
+    selfNames: [], selfTails: new Set(), payerNames: [], payeeNames: [], sideStats: []
+  }),
+  unlearnSelf: jest.fn().mockResolvedValue(undefined)
 }));
 
 // Wait for the background event processing (fired after the 200 response) to reach a mock
@@ -359,9 +362,11 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
   it('should flip to income when the TO side is the owner own name (incoming screenshot)', async () => {
     // Someone else transfer screenshot says "โอนสำเร็จ จาก นายสมชาย ไปยัง <ผม>" —
     // the expense keyword would mislabel it; the self-name rule must win.
-    const { getOwnNames, upsertContact } = jest.requireMock('../src/db/liff');
+    const { loadDirectionMemory, upsertContact } = jest.requireMock('../src/db/liff');
     (upsertContact as jest.Mock).mockClear();
-    (getOwnNames as jest.Mock).mockResolvedValueOnce(new Set(['นายเจ้าของบัญชี']));
+    (loadDirectionMemory as jest.Mock).mockResolvedValueOnce({
+      selfNames: ['นายเจ้าของบัญชี'], selfTails: new Set(), payerNames: [], payeeNames: [], sideStats: []
+    });
     (extractSlipInfo as jest.Mock).mockResolvedValueOnce({
       is_slip: true, amount: 300, date: '2026-09-26', merchant: 'นายสมชาย',
       direction: 'expense', category: null, confidence: 'high',
@@ -390,9 +395,10 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
   });
 
   it('should flip to income for a remembered payer sitting in the FROM position', async () => {
-    const { findContact, upsertContact } = jest.requireMock('../src/db/liff');
-    (upsertContact as jest.Mock).mockClear();
-    (findContact as jest.Mock).mockResolvedValueOnce({ category: 'ขายของ', type: 'income', seen_count: 1 });
+    const { loadDirectionMemory } = jest.requireMock('../src/db/liff');
+    (loadDirectionMemory as jest.Mock).mockResolvedValueOnce({
+      selfNames: [], selfTails: new Set(), payerNames: ['สมชาย'], payeeNames: [], sideStats: []
+    });
     (extractSlipInfo as jest.Mock).mockResolvedValueOnce({
       is_slip: true, amount: 300, date: '2026-09-26', merchant: 'นายสมชาย',
       direction: 'expense', category: null, confidence: 'high',
@@ -590,9 +596,10 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
   it('should flip to income by the owner account-tail signature even with an expense keyword', async () => {
     // Owner's tail (x5678) learned from past slips sits on the ถึง side of
     // someone else's transfer screenshot — deterministic income.
-    const { getOwnNames, upsertContact } = jest.requireMock('../src/db/liff');
-    (upsertContact as jest.Mock).mockClear();
-    (getOwnNames as jest.Mock).mockResolvedValueOnce(new Set(['acc:5678']));
+    const { loadDirectionMemory } = jest.requireMock('../src/db/liff');
+    (loadDirectionMemory as jest.Mock).mockResolvedValueOnce({
+      selfNames: [], selfTails: new Set(['5678']), payerNames: [], payeeNames: [], sideStats: []
+    });
     (extractSlipInfo as jest.Mock).mockResolvedValueOnce({
       is_slip: true, amount: 450, date: '2026-09-27', merchant: 'นายสมชาย',
       direction: 'expense', category: null, confidence: 'high',
@@ -617,9 +624,11 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
   });
 
   it('should learn the owner account tail from a saved expense slip', async () => {
-    const { getOwnNames, upsertContact } = jest.requireMock('../src/db/liff');
+    const { loadDirectionMemory, upsertContact } = jest.requireMock('../src/db/liff');
     (upsertContact as jest.Mock).mockClear();
-    (getOwnNames as jest.Mock).mockResolvedValueOnce(new Set(['นายเจ้าของบัญชี']));
+    (loadDirectionMemory as jest.Mock).mockResolvedValueOnce({
+      selfNames: ['นายเจ้าของบัญชี'], selfTails: new Set(), payerNames: [], payeeNames: [], sideStats: []
+    });
     (extractSlipInfo as jest.Mock).mockResolvedValueOnce({
       is_slip: true, amount: 500, date: '2026-09-27', merchant: 'ร้านกาแฟ',
       direction: 'expense', category: 'อาหารและเครื่องดื่ม', confidence: 'high',

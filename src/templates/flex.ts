@@ -125,17 +125,18 @@ export function createAutoSavedFlex(data: AutoSavedData): messagingApi.FlexMessa
       header: {
         type: 'box',
         layout: 'horizontal',
-        backgroundColor: '#FFFFFF',
+        // Soft tinted band at the top of the receipt — green for income, red for expense
+        backgroundColor: soft,
         paddingAll: '20px',
-        paddingBottom: '8px',
+        paddingBottom: '12px',
         contents: [
-          { type: 'text', text: 'LineSave', size: 'sm', weight: 'bold', color: '#16181D', flex: 0 },
+          { type: 'text', text: 'LineSave', size: 'sm', weight: 'bold', color: accent, flex: 0 },
           { type: 'filler', flex: 1 },
           {
             type: 'box',
             layout: 'horizontal',
-            backgroundColor: soft,
-            cornerRadius: '10px',
+            backgroundColor: '#FFFFFF',
+            cornerRadius: '12px',
             paddingAll: '5px',
             paddingStart: '10px', paddingEnd: '10px',
             flex: 0,

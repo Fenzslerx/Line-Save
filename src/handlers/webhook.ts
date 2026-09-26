@@ -60,11 +60,16 @@ function normalizeCategory(raw: string | null, type: 'income' | 'expense'): stri
   return 'อื่นๆ';
 }
 
+/** Observability for the batch assumption: a lookalike slip seconds later was auto-saved. */
+function tryLogDupBatchAutoSaved(db: D1Database | null, requestId: string, duplicateOf: string | undefined): void {
+  logStage(db, requestId, 'dup_recent_batch_autosaved', { duplicate_of: duplicateOf });
+  console.log(`[Slip Detection] Lookalike of ${duplicateOf} within batch window — auto-saving as a new payment.`);
+}
+
 /**
  * Category for a parsed slip: a user-taught rule (LIFF) wins, then the LLM's
  * normalized guess.
- */
-async function resolveSlipCategory(
+ */async function resolveSlipCategory(
   db: D1Database,
   merchant: string | null,
   rawCategory: string | null,
@@ -285,10 +290,13 @@ async function handleImageMessage(
   const imageBuffer = await downloadMessageImage(messageId);
 
   await markStage('extracting');
-  // Identical slip images resolve instantly from cache instead of calling the LLM again
+  // Identical slip images resolve instantly from cache instead of calling the LLM again.
+  // A cache hit also means this exact photo was sent before — a strong duplicate signal.
   const imageHash = `img:${crypto.createHash('sha256').update(imageBuffer).digest('hex')}`;
-  let extraction = db ? await getCachedExtraction(db, imageHash).catch(() => null) : null;
-  if (extraction) {
+  const cachedHit = db ? await getCachedExtraction(db, imageHash).catch(() => null) : null;
+  const imageReplay = Boolean(cachedHit);
+  let extraction: SlipExtractionResult | null = cachedHit;
+  if (cachedHit) {
     logEvent(db, 'info', 'ai', 'gemini_cache_hit', imageHash.slice(0, 20));
     console.log('[Slip Detection] Extraction served from cache.');
   } else {
@@ -317,6 +325,11 @@ async function handleImageMessage(
     if (db && extraction.is_slip) {
       await saveExtractionCache(db, imageHash, extraction).catch(() => {});
     }
+  }
+
+  if (!extraction) {
+    // Unreachable: both branches above assign a result
+    throw new Error('slip extraction missing');
   }
 
   // Mark the message as handled so redeliveries are skipped
@@ -369,33 +382,43 @@ async function handleImageMessage(
       merchant: extraction.merchant
     }).catch(() => null);
     if (dup) {
-      await setSlipStage(db, messageId, 'awaiting_confirm', 'pending', userId);
-      logStage(db, requestId, 'duplicate_detected', { duplicate_of: dup.id });
-      console.log(`[Slip Detection] Duplicate content of transaction ${dup.id} — asking user to confirm.`);
-      try {
-        await replyLineMessage(replyToken, [
-          createDuplicateSlipFlex({
-            existing: {
-              amount: dup.amount,
-              type: dup.type,
-              category: dup.category ?? 'อื่นๆ',
-              merchant: dup.merchant ?? null,
-              date: dup.date
-            },
-            incoming: {
-              amount: extraction.amount,
-              type: txType,
-              category,
-              merchant: extraction.merchant,
-              date: txDate
-            },
-            messageId
-          })
-        ]);
-      } finally {
-        await finishRequest(db, requestId, 'ignored', Date.now() - requestStart, 'duplicate_slip');
+      // Album/batch support: several photos sent together may legitimately be
+      // identical-looking payments (e.g. two 84-baht fares same day). If the
+      // matching transaction was saved seconds ago AND this is a different
+      // photo, treat it as the next slip in the batch and auto-save. A re-sent
+      // identical photo (cache hit) still gets the confirmation card.
+      const recentBatch = dup.age_seconds !== null && dup.age_seconds < 120;
+      if (recentBatch && !imageReplay) {
+        tryLogDupBatchAutoSaved(db, requestId, dup.id);
+      } else {
+        await setSlipStage(db, messageId, 'awaiting_confirm', 'pending', userId);
+        logStage(db, requestId, 'duplicate_detected', { duplicate_of: dup.id });
+        console.log(`[Slip Detection] Duplicate content of transaction ${dup.id} — asking user to confirm.`);
+        try {
+          await replyLineMessage(replyToken, [
+            createDuplicateSlipFlex({
+              existing: {
+                amount: dup.amount,
+                type: dup.type,
+                category: dup.category ?? 'อื่นๆ',
+                merchant: dup.merchant ?? null,
+                date: dup.date
+              },
+              incoming: {
+                amount: extraction.amount,
+                type: txType,
+                category,
+                merchant: extraction.merchant,
+                date: txDate
+              },
+              messageId
+            })
+          ]);
+        } finally {
+          await finishRequest(db, requestId, 'ignored', Date.now() - requestStart, 'duplicate_slip');
+        }
+        return;
       }
-      return;
     }
   }
 

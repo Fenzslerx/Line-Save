@@ -303,6 +303,59 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
     expect(flexJson).not.toContain('บันทึกรายจ่ายแล้ว');
   });
 
+  it('should auto-save a lookalike slip sent seconds later in the same batch', async () => {
+    const dupRow = {
+      id: 'TX_BATCH_1', type: 'expense', category: 'การเดินทาง',
+      amount: 84, merchant: 'รถตู้', date: '2026-09-26', source: 'line-bot', age_seconds: 30
+    };
+    (getD1 as jest.Mock)
+      .mockReturnValueOnce(makeMockD1([]))
+      .mockReturnValueOnce(makeMockD1([]))
+      .mockReturnValueOnce(makeMockD1([], { U_TEST: [dupRow] })); // content dedup hits, but it is fresh
+
+    const repliesBefore = (replyLineMessage as jest.Mock).mock.calls.length;
+    const res = await postWebhook(makeImageEvent('326001', 'df377ba0337f43769f6e07dd95ab0f7f', {
+      type: 'user', userId: 'U_TEST_USER_001'
+    }));
+
+    expect(res.status).toBe(200);
+    await waitForMockCalls(replyLineMessage as jest.Mock, repliesBefore + 1);
+
+    // Saved as a NEW payment (auto-saved card), not the duplicate warning card
+    const flex = (replyLineMessage as jest.Mock).mock.calls[repliesBefore][1][0];
+    const flexJson = JSON.stringify(flex);
+    expect(flexJson).toContain('บันทึกรายจ่ายแล้ว');
+    expect(flexJson).not.toContain('act=dup_save');
+  });
+
+  it('should still ask for confirmation when the exact same photo is re-sent', async () => {
+    const cached = {
+      is_slip: true, amount: 84, date: '2026-09-26', merchant: 'รถตู้',
+      direction: 'expense', category: 'การเดินทาง', confidence: 'high'
+    };
+    const dupRow = {
+      id: 'TX_BATCH_1', type: 'expense', category: 'การเดินทาง',
+      amount: 84, merchant: 'รถตู้', date: '2026-09-26', source: 'line-bot', age_seconds: 30
+    };
+    (getD1 as jest.Mock)
+      .mockReturnValueOnce(makeMockD1([]))
+      .mockReturnValueOnce(makeMockD1([]))
+      .mockReturnValueOnce(
+        makeMockD1([], { U_TEST: [dupRow], 'img:': [{ result_json: JSON.stringify(cached) }] })
+      );
+
+    const repliesBefore = (replyLineMessage as jest.Mock).mock.calls.length;
+    const res = await postWebhook(makeImageEvent('326002', 'ef377ba0337f43769f6e07dd95ab0f7f', {
+      type: 'user', userId: 'U_TEST_USER_001'
+    }));
+
+    expect(res.status).toBe(200);
+    await waitForMockCalls(replyLineMessage as jest.Mock, repliesBefore + 1);
+
+    const flex = (replyLineMessage as jest.Mock).mock.calls[repliesBefore][1][0];
+    expect(JSON.stringify(flex)).toContain('act=dup_save');
+  });
+
   it('should flip a transaction to income via the toggle_type postback', async () => {
     const txRow = {
       id: 'TX_TOGGLE_1', user_id: 'U_TEST_USER_001', group_id: null, type: 'expense',

@@ -110,10 +110,11 @@ export async function createTransaction(db: D1Database, tx: TransactionRecord): 
 export async function findDuplicateSlip(
   db: D1Database,
   slip: { userId: string; amount: number; type: 'income' | 'expense'; date: string; merchant?: string | null }
-): Promise<TransactionRecord | null> {
+): Promise<(TransactionRecord & { age_seconds: number | null }) | null> {
   const { results } = await db
     .prepare(
-      `SELECT id, type, category, amount, merchant, date, source
+      `SELECT id, type, category, amount, merchant, date, source,
+              CAST((julianday('now') - julianday(created_at)) * 86400 AS INTEGER) AS age_seconds
        FROM transactions
        WHERE user_id = ? AND type = ? AND amount = ? AND date = ?
          AND ((merchant IS NULL AND ? IS NULL) OR merchant = ?)
@@ -132,7 +133,8 @@ export async function findDuplicateSlip(
     category: String(row.category ?? 'อื่นๆ'),
     amount: Number(row.amount),
     merchant: row.merchant ?? null,
-    date: String(row.date)
+    date: String(row.date),
+    age_seconds: Number.isFinite(Number(row.age_seconds)) ? Number(row.age_seconds) : null
   };
 }
 

@@ -25,6 +25,9 @@ export interface SlipExtractionResult {
   /** Both printed parties (จาก / ถึง) — set by the rule parser, used for transfer detection */
   party_from?: string | null;
   party_to?: string | null;
+  /** Account-tail signatures per party (last 4 digits) — strongest direction signal */
+  party_from_tails?: string[];
+  party_to_tails?: string[];
 }
 
 let geminiClient: GoogleGenAI | null = null;

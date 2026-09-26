@@ -201,6 +201,30 @@ export function parseParties(text: string): { from: string | null; to: string | 
 }
 
 /**
+ * Account-tail signatures printed next to each party ("บัญชีออมทรัพย์ x1234",
+ * "KBank x5678", "123-4-56789-0"). Digits never OCR-garble the way Thai names
+ * do, and the OWNER's tail is constant across every slip from their phone —
+ * the strongest direction signal in the system. Tails are normalized to the
+ * LAST 4 digits so masked (`x1234`) and full numbers interoperate.
+ */
+export function parsePartyTails(text: string): { from: string[]; to: string[] } {
+  const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean);
+  const tailsOn = (markers: string[]): string[] => {
+    const out: string[] = [];
+    for (const line of lines) {
+      if (!markers.some(m => line.includes(m))) continue;
+      for (const m of line.matchAll(/\b[xX×*](\d{3,4})\b/g)) out.push(m[1]);
+      for (const m of line.matchAll(/\b\d{4,}\b/g)) {
+        const digits = m[0].replace(/\D/g, '');
+        out.push(digits.slice(-4));
+      }
+    }
+    return [...new Set(out)];
+  };
+  return { from: tailsOn(FROM_MARKERS), to: tailsOn(TO_MARKERS) };
+}
+
+/**
  * Counterparty name (who sent / who received). Direction-aware markers and a
  * bottom-up scan: on Thai slips the "จาก/ถึง" block sits near the bottom, so
  * the last matching line is the real party — not a header mention.
@@ -269,6 +293,7 @@ export function parseSlipFromOcr(ocrText: string): SlipExtractionResult | null {
   const merchant = parseCounterparty(ocrText, direction);
   const category = parseCategory(ocrText, direction, merchant);
   const parties = parseParties(ocrText);
+  const tails = parsePartyTails(ocrText);
 
   return {
     is_slip: true,
@@ -279,6 +304,8 @@ export function parseSlipFromOcr(ocrText: string): SlipExtractionResult | null {
     category,
     party_from: parties.from,
     party_to: parties.to,
+    party_from_tails: tails.from,
+    party_to_tails: tails.to,
     // Rule-based parse of templated Thai slips is reliable when amount+direction both match
     confidence: 'high'
   };

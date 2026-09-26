@@ -117,13 +117,22 @@ async function saveSlipFromExtraction(
     date: txDate
   });
   if (saved.id) {
-    // Learn the owner's own printed name: on outgoing slips it is the "จาก"
-    // side, on incoming ones the "ถึง" side — feeds the self-name direction rule.
-    if (txType === 'expense' && extraction.party_from) {
-      await upsertContact(db, userId, extraction.party_from, 'self', null).catch(() => {});
-    }
-    if (txType === 'income' && extraction.party_to) {
-      await upsertContact(db, userId, extraction.party_to, 'self', null).catch(() => {});
+    // Learn the owner's identifiers: printed names AND account-tail signatures.
+    // On outgoing slips the owner is the "จาก" side; on incoming ones the "ถึง" side.
+    if (txType === 'expense') {
+      for (const t of extraction.party_from_tails || []) {
+        await upsertContact(db, userId, 'acc:' + t, 'self', null).catch(() => {});
+      }
+      if (extraction.party_from) {
+        await upsertContact(db, userId, extraction.party_from, 'self', null).catch(() => {});
+      }
+    } else {
+      for (const t of extraction.party_to_tails || []) {
+        await upsertContact(db, userId, 'acc:' + t, 'self', null).catch(() => {});
+      }
+      if (extraction.party_to) {
+        await upsertContact(db, userId, extraction.party_to, 'self', null).catch(() => {});
+      }
     }
     if (extraction.merchant) {
       await upsertContact(db, userId, extraction.merchant, txType, category).catch(() => {});
@@ -132,15 +141,27 @@ async function saveSlipFromExtraction(
   return saved;
 }
 
+/** Account-tail identifiers live in contact_names as `acc:<last4>` self-entries. */
+function getOwnTails(ownNames: Set<string>): Set<string> {
+  const tails = new Set<string>();
+  for (const n of ownNames) {
+    if (n.startsWith('acc:')) tails.add(n.slice(4));
+  }
+  return tails;
+}
+
 /**
  * Direction inference from the contact memory, in priority order:
  *   1. TO side is the account owner's own name → the money is coming IN
  *      (screenshots of other people's transfers say "โอนสำเร็จ" — the keyword
  *      would mislabel them as expense).
  *   2. FROM side is the owner's own name → outgoing, confirms expense.
- *   3. A name remembered as an INCOME payer sits in the FROM position → income.
+ *   3. Account-tail match: a tail the owner's slips always print, sitting on
+ *      the ถึง side → income; on the จาก side → expense. Digits never garble
+ *      like names, so this is the most deterministic signal.
+ *   4. A name remembered as an INCOME payer sits in the FROM position → income.
  * Returns the corrected direction + counterparty + which rule decided it
- * (self rules are authoritative; payer memory is strong), or null to keep
+ * (self/tail rules are authoritative; payer memory is strong), or null to keep
  * the keyword guess.
  */
 async function inferDirectionFromMemory(
@@ -150,9 +171,12 @@ async function inferDirectionFromMemory(
 ): Promise<{ direction: 'income' | 'expense'; merchant: string | null; bySelf: boolean } | null> {
   const from = extraction.party_from;
   const to = extraction.party_to;
-  if (!from && !to) return null;
+  const fromTails = extraction.party_from_tails || [];
+  const toTails = extraction.party_to_tails || [];
+  if (!from && !to && fromTails.length === 0 && toTails.length === 0) return null;
 
   const own = await getOwnNames(db, userId);
+  const ownTails = getOwnTails(own);
   const isOwn = (n: string | null | undefined) => {
     if (!n) return false;
     for (const o of own) if (isInternalTransfer(o, n)) return true;
@@ -168,6 +192,18 @@ async function inferDirectionFromMemory(
   if (fromOwn && !toOwn) {
     logEvent(db, 'info', 'bot', 'self_rule_expense', null, {});
     return { direction: 'expense', merchant: extraction.merchant ?? to ?? null, bySelf: true };
+  }
+
+  // Account-tail signature — deterministic even when names OCR badly
+  if (ownTails.size > 0) {
+    if (toTails.some(t => ownTails.has(t)) && from && !fromTails.some(t => ownTails.has(t))) {
+      logEvent(db, 'info', 'bot', 'tail_rule_income', `tails=${toTails.join(',')}`);
+      return { direction: 'income', merchant: from, bySelf: true };
+    }
+    if (fromTails.some(t => ownTails.has(t)) && !toTails.some(t => ownTails.has(t))) {
+      logEvent(db, 'info', 'bot', 'tail_rule_expense', `tails=${fromTails.join(',')}`);
+      return { direction: 'expense', merchant: extraction.merchant ?? to ?? null, bySelf: true };
+    }
   }
 
   if (from) {
@@ -747,9 +783,15 @@ async function handlePostback(
         if (extraction && extraction.is_slip) {
           const finalCategory = fields.category ?? txCategory;
           if (newType === 'income') {
+            for (const t of extraction.party_to_tails || []) {
+              await upsertContact(db, userId, 'acc:' + t, 'self', null).catch(() => {});
+            }
             if (extraction.party_to) await upsertContact(db, userId, extraction.party_to, 'self', null).catch(() => {});
             if (extraction.party_from) await upsertContact(db, userId, extraction.party_from, 'income', finalCategory).catch(() => {});
           } else {
+            for (const t of extraction.party_from_tails || []) {
+              await upsertContact(db, userId, 'acc:' + t, 'self', null).catch(() => {});
+            }
             if (extraction.party_from) await upsertContact(db, userId, extraction.party_from, 'self', null).catch(() => {});
             if (extraction.party_to) await upsertContact(db, userId, extraction.party_to, 'expense', finalCategory).catch(() => {});
           }
@@ -801,11 +843,16 @@ async function handlePostback(
       if (newType === 'expense' && extraction.party_to) extraction.merchant = extraction.party_to;
       const saved = await saveSlipFromExtraction(db, userId, groupId, extraction);
       await setSlipStage(db, msgId, 'saved', 'done', userId);
-      if (newType === 'income' && extraction.party_to) {
-        await upsertContact(db, userId, extraction.party_to, 'self', null).catch(() => {});
-      }
-      if (newType === 'expense' && extraction.party_from) {
-        await upsertContact(db, userId, extraction.party_from, 'self', null).catch(() => {});
+      if (newType === 'income') {
+        for (const t of extraction.party_to_tails || []) {
+          await upsertContact(db, userId, 'acc:' + t, 'self', null).catch(() => {});
+        }
+        if (extraction.party_to) await upsertContact(db, userId, extraction.party_to, 'self', null).catch(() => {});
+      } else {
+        for (const t of extraction.party_from_tails || []) {
+          await upsertContact(db, userId, 'acc:' + t, 'self', null).catch(() => {});
+        }
+        if (extraction.party_from) await upsertContact(db, userId, extraction.party_from, 'self', null).catch(() => {});
       }
       await replyLineMessage(replyToken, [
         createAutoSavedFlex({

@@ -4,6 +4,7 @@ import {
   parseThaiDate,
   parseCounterparty,
   parseParties,
+  parsePartyTails,
   bahtMarkedAmounts
 } from '../src/services/slipParser';
 
@@ -164,5 +165,26 @@ describe('AI-free slip parser (rule-based, from Typhoon OCR text)', () => {
     expect(r).not.toBeNull();
     expect(r!.party_from).toContain('นายเอ');
     expect(r!.party_to).toContain('ร้านบี');
+  });
+
+  it('should extract account-tail signatures per party side', () => {
+    const text = [
+      'KBank โอนเงินสำเร็จ',
+      'จำนวนเงิน 500 บาท',
+      'จาก นายเอ ใจดี บัญชีออมทรัพย์ x1234',
+      'ไปยัง ร้านบี KBank x5678'
+    ].join('\n');
+    const tails = parsePartyTails(text);
+    expect(tails.from).toContain('1234');
+    expect(tails.to).toContain('5678');
+    const r = parseSlipFromOcr(text);
+    expect(r!.party_from_tails).toContain('1234');
+    expect(r!.party_to_tails).toContain('5678');
+  });
+
+  it('should normalize full account numbers to their last 4 digits', () => {
+    const text = 'จาก นายเอ เลขที่บัญชี 1234567890';
+    const tails = parsePartyTails(text);
+    expect(tails.from).toContain('7890');
   });
 });

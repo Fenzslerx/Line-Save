@@ -282,6 +282,7 @@ var EV = {
   'reply_ok': 'ตอบกลับสำเร็จ', 'reply_fail': 'ตอบกลับไม่สำเร็จ',
   'internal_transfer': 'โอนข้ามบัญชี (ไม่บันทึก)', 'duplicate_detected': 'พบสลิปซ้ำ — ถามผู้ใช้',
   'self_rule_income': 'กฎชื่อตัวเอง → รายรับ', 'self_rule_expense': 'กฎชื่อตัวเอง → รายจ่าย',
+  'tail_rule_income': 'กฎเลขบัญชี → รายรับ', 'tail_rule_expense': 'กฎเลขบัญชี → รายจ่าย',
   'dup_recent_batch_autosaved': 'สลิปชุดเดียวกัน — บันทึกเพิ่ม', 'contact_memory_income': 'จำชื่อคนโอน → รายรับ',
   'ocr_parser_hit': 'อ่านสลิปด้วยกฎ (ไม่ใช้ AI)', 'ocr_parser_miss': 'กฎอ่านไม่ได้ → ส่งต่อ AI',
   'gemini_call_ok': 'เรียก AI สำเร็จ', 'gemini_call_fail': 'เรียก AI ไม่สำเร็จ',

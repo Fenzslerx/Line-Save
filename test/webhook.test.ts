@@ -588,6 +588,62 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
     expect(upsertContact).toHaveBeenCalledWith(expect.anything(), 'U_TEST_USER_001', 'ร้านตัวแทน', 'self', null);
   });
 
+  it('should flip to income by the owner account-tail signature even with an expense keyword', async () => {
+    // Owner's tail (x5678) learned from past slips sits on the ถึง side of
+    // someone else's transfer screenshot — deterministic income.
+    const { getOwnNames, upsertContact } = jest.requireMock('../src/db/liff');
+    (upsertContact as jest.Mock).mockClear();
+    (getOwnNames as jest.Mock).mockResolvedValueOnce(new Set(['acc:5678']));
+    (extractSlipInfo as jest.Mock).mockResolvedValueOnce({
+      is_slip: true, amount: 450, date: '2026-09-27', merchant: 'นายสมชาย',
+      direction: 'expense', category: null, confidence: 'high',
+      party_from: 'นายสมชาย', party_to: 'นายเจ้าของบัญชี',
+      party_from_tails: ['1234'], party_to_tails: ['5678']
+    });
+    (getD1 as jest.Mock)
+      .mockReturnValueOnce(makeMockD1([]))
+      .mockReturnValueOnce(makeMockD1([]))
+      .mockReturnValueOnce(makeMockD1([]));
+
+    const repliesBefore = (replyLineMessage as jest.Mock).mock.calls.length;
+    const res = await postWebhook(makeImageEvent('326008', '4f377ba0337f43769f6e07dd95ab0f7f', {
+      type: 'user', userId: 'U_TEST_USER_001'
+    }));
+
+    expect(res.status).toBe(200);
+    await waitForMockCalls(replyLineMessage as jest.Mock, repliesBefore + 1);
+    const flex = (replyLineMessage as jest.Mock).mock.calls[repliesBefore][1][0];
+    expect(JSON.stringify(flex)).toContain('บันทึกรายรับแล้ว');
+    expect(JSON.stringify(flex)).toContain('+฿450');
+  });
+
+  it('should learn the owner account tail from a saved expense slip', async () => {
+    const { getOwnNames, upsertContact } = jest.requireMock('../src/db/liff');
+    (upsertContact as jest.Mock).mockClear();
+    (getOwnNames as jest.Mock).mockResolvedValueOnce(new Set(['นายเจ้าของบัญชี']));
+    (extractSlipInfo as jest.Mock).mockResolvedValueOnce({
+      is_slip: true, amount: 500, date: '2026-09-27', merchant: 'ร้านกาแฟ',
+      direction: 'expense', category: 'อาหารและเครื่องดื่ม', confidence: 'high',
+      party_from: 'นายเจ้าของบัญชี', party_to: 'ร้านกาแฟ',
+      party_from_tails: ['1234'], party_to_tails: ['5678']
+    });
+    (getD1 as jest.Mock)
+      .mockReturnValueOnce(makeMockD1([]))
+      .mockReturnValueOnce(makeMockD1([]))
+      .mockReturnValueOnce(makeMockD1([]));
+
+    const repliesBefore = (replyLineMessage as jest.Mock).mock.calls.length;
+    const res = await postWebhook(makeImageEvent('326009', '5f377ba0337f43769f6e07dd95ab0f7f', {
+      type: 'user', userId: 'U_TEST_USER_001'
+    }));
+
+    expect(res.status).toBe(200);
+    await waitForMockCalls(replyLineMessage as jest.Mock, repliesBefore + 1);
+    // The จาก side tail becomes the owner's signature; the counterparty tail must not
+    expect(upsertContact).toHaveBeenCalledWith(expect.anything(), 'U_TEST_USER_001', 'acc:1234', 'self', null);
+    expect(upsertContact).not.toHaveBeenCalledWith(expect.anything(), 'U_TEST_USER_001', 'acc:5678', 'self', null);
+  });
+
   it('should flip a transaction to income via the toggle_type postback', async () => {
     const txRow = {
       id: 'TX_TOGGLE_1', user_id: 'U_TEST_USER_001', group_id: null, type: 'expense',

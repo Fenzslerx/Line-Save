@@ -116,7 +116,8 @@ export function createAutoSavedFlex(data: AutoSavedData): messagingApi.FlexMessa
       header: {
         type: 'box',
         layout: 'vertical',
-        backgroundColor: isIncome ? '#0E9F6E' : '#06C755',
+        // income = green, expense = red (mirrors the LIFF dashboard's +/- colors)
+        backgroundColor: isIncome ? '#0E9F6E' : '#E5484D',
         paddingAll: '16px',
         contents: [
           {

@@ -332,8 +332,13 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
       expect.anything(), 'U_TEST_USER_001', 'TX_TOGGLE_1',
       expect.objectContaining({ type: 'income', category: 'รายรับทั่วไป' })
     );
-    const reply = (replyLineMessage as jest.Mock).mock.calls[repliesBefore][1][0];
-    expect(reply.text).toContain('รายรับ');
+    // A fresh saved card is re-sent: income header is green and the toggle
+    // button now offers flipping back to expense
+    const flex = (replyLineMessage as jest.Mock).mock.calls[repliesBefore][1][0];
+    const flexJson = JSON.stringify(flex);
+    expect(flexJson).toContain('#0E9F6E');
+    expect(flexJson).toContain('บันทึกรายรับแล้ว');
+    expect(flexJson).toContain('สลับเป็นรายจ่าย');
   });
 
   it('should return 200 for health check', async () => {

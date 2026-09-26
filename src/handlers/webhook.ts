@@ -539,11 +539,18 @@ async function handlePostback(
       if (newType === 'income' && !INCOME_CATEGORIES.includes(txCategory)) fields.category = 'รายรับทั่วไป';
       if (newType === 'expense' && !EXPENSE_CATEGORIES.includes(txCategory)) fields.category = 'อื่นๆ';
       await updateTransaction(db, userId, txId, fields);
+      // Re-send the saved card so the user sees the flip with the right color
+      // (green for income, red for expense) and can toggle again if needed.
+      const newCategory = fields.category ?? tx.category ?? 'อื่นๆ';
       await replyLineMessage(replyToken, [
-        {
-          type: 'text',
-          text: `เปลี่ยนรายการ ${tx.type === 'income' ? '+' : '−'}฿${tx.amount.toLocaleString()} เป็น${newType === 'income' ? 'รายรับ' : 'รายจ่าย'}เรียบร้อยครับ`
-        }
+        createAutoSavedFlex({
+          amount: tx.amount,
+          merchant: tx.merchant ?? null,
+          date: tx.date,
+          type: newType,
+          category: newCategory,
+          txId: tx.id
+        })
       ]);
       return;
     }

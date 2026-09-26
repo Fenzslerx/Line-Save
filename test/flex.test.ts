@@ -36,8 +36,11 @@ describe('Flex Message Templates', () => {
 
     // No interactive postbacks anywhere — fully automatic flow
     expect(JSON.stringify(flex)).not.toContain('postback');
-    // Expense sign shown
-    expect(JSON.stringify(bubble.header)).toContain('−฿450');
+    // Receipt-style: status badge in header (red for expense), amount in body
+    expect(JSON.stringify(bubble.header)).toContain('บันทึกรายจ่ายแล้ว');
+    expect(JSON.stringify(bubble.header)).toContain('#E5484D');
+    expect(bodyJson).toContain('−฿450');
+    expect(bodyJson).toContain('ยอดชำระสุทธิ');
   });
 
   it('should generate an auto-saved income card with + sign and income type row', () => {
@@ -50,8 +53,11 @@ describe('Flex Message Templates', () => {
     });
 
     const bubble = flex.contents as any;
-    expect(JSON.stringify(bubble.header)).toContain('+฿1,000');
-    expect(JSON.stringify(bubble.body)).toContain('รายรับ');
+    // Income: green badge in header, + amount in body
+    expect(JSON.stringify(bubble.header)).toContain('#0E9F6E');
+    expect(JSON.stringify(bubble.header)).toContain('บันทึกรายรับแล้ว');
+    expect(JSON.stringify(bubble.body)).toContain('+฿1,000');
+    expect(JSON.stringify(bubble.body)).toContain('ยอดรับสุทธิ');
 
     const buttons = collectButtons(bubble);
     expect(buttons).toHaveLength(1);

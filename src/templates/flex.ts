@@ -46,42 +46,51 @@ export interface SummaryData {
 export function createAutoSavedFlex(data: AutoSavedData): messagingApi.FlexMessage {
   const isIncome = data.type === 'income';
   const liffUrl = config.liffId ? `https://liff.line.me/${config.liffId}` : null;
+  const accent = isIncome ? '#0E9F6E' : '#E5484D';
+  const soft = isIncome ? '#E6F7EF' : '#FDECEC';
+  const statusText = isIncome ? 'บันทึกรายรับแล้ว' : 'บันทึกรายจ่ายแล้ว';
+  const amountText =
+    (isIncome ? '+' : '−') +
+    '฿' +
+    data.amount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  const rows: messagingApi.FlexComponent[] = [
-    {
-      type: 'box',
-      layout: 'horizontal',
-      contents: [
-        { type: 'text', text: isIncome ? 'ประเภท' : 'ร้านค้า/ผู้รับ', size: 'sm', color: '#888888', flex: 3 },
-        {
-          type: 'text',
-          text: isIncome ? '💰 รายรับ' : (data.merchant || 'ไม่ระบุ'),
-          size: 'sm',
-          color: '#111111',
-          weight: 'bold',
-          align: 'end',
-          flex: 5,
-          wrap: true
-        }
-      ]
-    },
-    {
-      type: 'box',
-      layout: 'horizontal',
-      contents: [
-        { type: 'text', text: 'หมวดหมู่', size: 'sm', color: '#888888', flex: 3 },
-        { type: 'text', text: data.category, size: 'sm', color: '#111111', weight: 'bold', align: 'end', flex: 5 }
-      ]
-    },
-    {
-      type: 'box',
-      layout: 'horizontal',
-      contents: [
-        { type: 'text', text: 'วันที่ทำรายการ', size: 'sm', color: '#888888', flex: 3 },
-        { type: 'text', text: data.date, size: 'sm', color: '#111111', align: 'end', flex: 5 }
-      ]
-    }
+  const row = (label: string, value: string): messagingApi.FlexComponent => ({
+    type: 'box',
+    layout: 'horizontal',
+    contents: [
+      { type: 'text', text: label, size: 'sm', color: '#9AA0A8', flex: 3 },
+      {
+        type: 'text',
+        text: value,
+        size: 'sm',
+        color: '#16181D',
+        weight: 'bold',
+        align: 'end',
+        flex: 5,
+        wrap: true
+      }
+    ]
+  });
+
+  const bodyContents: messagingApi.FlexComponent[] = [
+    { type: 'text', text: isIncome ? 'ยอดรับสุทธิ' : 'ยอดชำระสุทธิ', size: 'xs', color: '#9AA0A8' },
+    { type: 'text', text: amountText, size: 'xxl', weight: 'bold', color: accent, margin: 'xs' },
+    { type: 'separator', margin: 'lg', color: '#E8EAED' },
+    row('หมวดหมู่', data.category),
+    row('ร้านค้า/ผู้รับ', data.merchant || 'ไม่ระบุ'),
+    row('วันที่ทำรายการ', data.date)
   ];
+  if (data.txId) {
+    bodyContents.push(row('รหัสอ้างอิง', '#' + data.txId.replace(/-/g, '').slice(0, 8).toUpperCase()));
+  }
+  bodyContents.push({ type: 'separator', margin: 'lg', color: '#E8EAED' });
+  bodyContents.push({
+    type: 'text',
+    text: 'รายการนี้ถูกบันทึกลงสมุดบัญชี LineSave เรียบร้อยแล้ว',
+    size: 'xs',
+    color: '#9AA0A8',
+    wrap: true
+  });
 
   const footer: messagingApi.FlexComponent[] = [];
   if (data.txId) {
@@ -109,39 +118,40 @@ export function createAutoSavedFlex(data: AutoSavedData): messagingApi.FlexMessa
 
   return {
     type: 'flex',
-    altText: `${isIncome ? 'รายรับ' : 'บันทึก'} ฿${data.amount.toLocaleString()} · ${data.category}`,
+    altText: `${isIncome ? 'รายรับ' : 'บันทึก'} ${amountText} · ${data.category}`,
     contents: {
       type: 'bubble',
       size: 'mega',
       header: {
         type: 'box',
-        layout: 'vertical',
-        // income = green, expense = red (mirrors the LIFF dashboard's +/- colors)
-        backgroundColor: isIncome ? '#0E9F6E' : '#E5484D',
-        paddingAll: '16px',
+        layout: 'horizontal',
+        backgroundColor: '#FFFFFF',
+        paddingAll: '20px',
+        paddingBottom: '8px',
         contents: [
+          { type: 'text', text: 'LineSave', size: 'sm', weight: 'bold', color: '#16181D', flex: 0 },
+          { type: 'filler', flex: 1 },
           {
-            type: 'text',
-            text: isIncome ? '✅ บันทึกรายรับแล้ว (อัตโนมัติ)' : '✅ บันทึกรายจ่ายแล้ว (อัตโนมัติ)',
-            color: '#FFFFFF',
-            weight: 'bold',
-            size: 'md'
-          },
-          {
-            type: 'text',
-            text: `${isIncome ? '+' : '−'}฿${data.amount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-            color: '#FFFFFF',
-            weight: 'bold',
-            size: 'xxl',
-            margin: 'sm'
+            type: 'box',
+            layout: 'horizontal',
+            backgroundColor: soft,
+            cornerRadius: '10px',
+            paddingAll: '5px',
+            paddingStart: '10px', paddingEnd: '10px',
+            flex: 0,
+            contents: [
+              { type: 'text', text: statusText, size: 'xs', weight: 'bold', color: accent }
+            ]
           }
         ]
       },
       body: {
         type: 'box',
         layout: 'vertical',
-        spacing: 'xs',
-        contents: rows
+        spacing: 'sm',
+        paddingAll: '20px',
+        paddingTop: '12px',
+        contents: bodyContents
       },
       footer: footer.length
         ? { type: 'box', layout: 'vertical', spacing: 'sm', contents: footer }

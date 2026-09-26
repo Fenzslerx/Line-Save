@@ -22,6 +22,9 @@ export interface SlipExtractionResult {
   direction: 'income' | 'expense' | null; // null when the slip does not clearly show money in vs out
   category: string | null; // best-fit category name, normalized by the webhook
   confidence: 'high' | 'medium' | 'low';
+  /** Both printed parties (จาก / ถึง) — set by the rule parser, used for transfer detection */
+  party_from?: string | null;
+  party_to?: string | null;
 }
 
 let geminiClient: GoogleGenAI | null = null;

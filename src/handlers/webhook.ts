@@ -122,6 +122,45 @@ async function saveSlipFromExtraction(
 }
 
 /**
+ * Direction inference from the contact memory:
+ *   - A party remembered from past EXPENSE slips (people the user pays) that
+ *     now appears in the "จาก/ผู้โอน" position is SENDING money to the user
+ *     → income. Requires seen_count >= 2 so one-off name collisions stay safe.
+ */
+async function inferDirectionFromMemory(
+  db: D1Database,
+  userId: string,
+  extraction: SlipExtractionResult
+): Promise<'income' | null> {
+  const from = extraction.party_from;
+  if (!from) return null;
+  const contact = await findContact(db, userId, from).catch(() => null);
+  if (contact && contact.type === 'expense' && contact.seen_count >= 2) {
+    logEvent(db, 'info', 'bot', 'contact_memory_income', `from=${hashUserId(from)} seen=${contact.seen_count}`);
+    return 'income';
+  }
+  return null;
+}
+
+function normalizeName(name: string): string {
+  return name
+    .replace(/^(นาย|นางสาว|นาง|ว่าที่)/, '')
+    .replace(/[\s.:\-]/g, '')
+    .toLowerCase();
+}
+
+/** Same party on both sides of a transfer slip → internal (own-account) transfer. */
+function isInternalTransfer(a: string, b: string): boolean {
+  const na = normalizeName(a);
+  const nb = normalizeName(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  const short = na.length <= nb.length ? na : nb;
+  const long = na.length <= nb.length ? nb : na;
+  return short.length >= 5 && long.includes(short);
+}
+
+/**
  * Validates the LINE webhook signature using HMAC-SHA256
  */
 export function verifySignature(rawBody: Buffer | string, signature: string): boolean {
@@ -346,6 +385,34 @@ async function handleImageMessage(
   // Mark the message as handled so redeliveries are skipped
   if (db) {
     await saveExtractionCache(db, `msg:${messageId}`, extraction).catch(() => {});
+  }
+
+  // Rule 1: same name printed on both sides (จาก = ถึง) → own-account transfer.
+  // Not income and not expense — skip saving entirely.
+  if (extraction.party_from && extraction.party_to &&
+      isInternalTransfer(extraction.party_from, extraction.party_to)) {
+    await setSlipStage(db, messageId, 'skipped', 'done', userId);
+    logStage(db, requestId, 'internal_transfer', { party: hashUserId(extraction.party_from) });
+    console.log(`[Slip Detection] [${requestId}] Internal transfer — not saved.`);
+    if (!groupId) {
+      await replyLineMessage(replyToken, [
+        {
+          type: 'text',
+          text: 'รายการนี้เป็นการโอนเข้าบัญชีตัวเอง (โอนข้ามบัญชี) จึงไม่บันทึกเป็นรายรับหรือรายจ่ายครับ'
+        }
+      ]).catch(() => {});
+    }
+    await finishRequest(db, requestId, 'ignored', Date.now() - requestStart, 'internal_transfer');
+    return;
+  }
+
+  // Rule 2: a name remembered from past expense slips now sits in the "จาก"
+  // position → that person is paying the user. Flip the direction to income.
+  const memoryDirection = db ? await inferDirectionFromMemory(db, userId, extraction) : null;
+  if (memoryDirection && extraction.party_from) {
+    extraction.direction = memoryDirection;
+    extraction.merchant = extraction.party_from;
+    extraction.category = null; // let the category chain re-resolve for the new type
   }
 
   await markStage('extracted');

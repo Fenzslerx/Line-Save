@@ -208,13 +208,17 @@ export async function findContact(
   db: D1Database,
   userId: string,
   name: string
-): Promise<{ category: string; type: 'income' | 'expense' } | null> {
+): Promise<{ category: string; type: 'income' | 'expense'; seen_count: number } | null> {
   const row = await db
-    .prepare('SELECT category, type FROM contact_names WHERE user_id = ? AND name = ?')
+    .prepare('SELECT category, type, seen_count FROM contact_names WHERE user_id = ? AND name = ?')
     .bind(userId, name)
     .first();
   if (!row || row.category == null) return null;
-  return { category: String(row.category), type: row.type === 'income' ? 'income' : 'expense' };
+  return {
+    category: String(row.category),
+    type: row.type === 'income' ? 'income' : 'expense',
+    seen_count: Number(row.seen_count ?? 1)
+  };
 }
 
 /**

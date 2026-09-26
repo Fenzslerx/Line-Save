@@ -354,6 +354,66 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
     expect(JSON.stringify(flex)).toContain('act=dup_save');
   });
 
+  it('should flip to income when a remembered expense counterparty is now the sender', async () => {
+    const { findContact, upsertContact } = jest.requireMock('../src/db/liff');
+    (upsertContact as jest.Mock).mockClear();
+    // The user has paid this person at least twice before (expense memory);
+    // now that person sits in the "จาก" position → they are paying the user.
+    (findContact as jest.Mock).mockResolvedValueOnce({ category: 'อื่นๆ', type: 'expense', seen_count: 2 });
+    (extractSlipInfo as jest.Mock).mockResolvedValueOnce({
+      is_slip: true, amount: 300, date: '2026-09-26', merchant: 'นายสมชาย',
+      direction: 'expense', category: null, confidence: 'high',
+      party_from: 'นายสมชาย', party_to: null
+    });
+    (getD1 as jest.Mock)
+      .mockReturnValueOnce(makeMockD1([]))
+      .mockReturnValueOnce(makeMockD1([]))
+      .mockReturnValueOnce(makeMockD1([]));
+
+    const repliesBefore = (replyLineMessage as jest.Mock).mock.calls.length;
+    const res = await postWebhook(makeImageEvent('326003', 'ff377ba0337f43769f6e07dd95ab0f7f', {
+      type: 'user', userId: 'U_TEST_USER_001'
+    }));
+
+    expect(res.status).toBe(200);
+    await waitForMockCalls(replyLineMessage as jest.Mock, repliesBefore + 1);
+
+    const flex = (replyLineMessage as jest.Mock).mock.calls[repliesBefore][1][0];
+    const flexJson = JSON.stringify(flex);
+    expect(flexJson).toContain('บันทึกรายรับแล้ว');
+    expect(flexJson).toContain('+฿300');
+    expect(upsertContact).toHaveBeenCalledWith(
+      expect.anything(), 'U_TEST_USER_001', 'นายสมชาย', 'income', expect.any(String)
+    );
+  });
+
+  it('should skip saving and notify on an own-account (cross-bank) transfer', async () => {
+    const { upsertContact } = jest.requireMock('../src/db/liff');
+    (upsertContact as jest.Mock).mockClear();
+    (extractSlipInfo as jest.Mock).mockResolvedValueOnce({
+      is_slip: true, amount: 5000, date: '2026-09-26', merchant: 'นายสมชาย',
+      direction: 'expense', category: 'อื่นๆ', confidence: 'high',
+      party_from: 'นายสมชาย ใจดี', party_to: 'นายสมชาย ใจดี'
+    });
+    (getD1 as jest.Mock)
+      .mockReturnValueOnce(makeMockD1([]))
+      .mockReturnValueOnce(makeMockD1([]))
+      .mockReturnValueOnce(makeMockD1([]));
+
+    const repliesBefore = (replyLineMessage as jest.Mock).mock.calls.length;
+    const res = await postWebhook(makeImageEvent('326004', '0f377ba0337f43769f6e07dd95ab0f7f', {
+      type: 'user', userId: 'U_TEST_USER_001'
+    }));
+
+    expect(res.status).toBe(200);
+    await waitForMockCalls(replyLineMessage as jest.Mock, repliesBefore + 1);
+
+    const reply = (replyLineMessage as jest.Mock).mock.calls[repliesBefore][1][0];
+    expect(reply.text).toContain('โอนข้ามบัญชี');
+    // Nothing was saved — no saved card was ever sent
+    expect(upsertContact).not.toHaveBeenCalled();
+  });
+
   it('should flip a transaction to income via the toggle_type postback', async () => {
     const txRow = {
       id: 'TX_TOGGLE_1', user_id: 'U_TEST_USER_001', group_id: null, type: 'expense',

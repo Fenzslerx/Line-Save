@@ -3,6 +3,7 @@ import {
   parseAmount,
   parseThaiDate,
   parseCounterparty,
+  parseParties,
   bahtMarkedAmounts
 } from '../src/services/slipParser';
 
@@ -134,5 +135,26 @@ describe('AI-free slip parser (rule-based, from Typhoon OCR text)', () => {
 
   it('should strip account refs from counterparty names', () => {
     expect(parseCounterparty('จาก นายสมชาย ใจดี x1234', 'income')).toBe('นายสมชาย ใจดี');
+  });
+
+  it('should extract both printed parties for transfer detection', () => {
+    const text = [
+      'KBank',
+      'โอนเงินสำเร็จ',
+      'จำนวนเงิน 500 บาท',
+      'จาก นายสมชาย ใจดี',
+      'ไปยัง ร้านอาหารตามสั่ง'
+    ].join('\n');
+    const parties = parseParties(text);
+    expect(parties.from).toContain('นายสมชาย');
+    expect(parties.to).toContain('ร้านอาหารตามสั่ง');
+  });
+
+  it('should expose party_from/party_to on parsed slips', () => {
+    const text = 'โอนสำเร็จ จำนวนเงิน 500 บาท 26/09/2569\nจาก นายเอ ใจดี\nไปยัง ร้านบี';
+    const r = parseSlipFromOcr(text);
+    expect(r).not.toBeNull();
+    expect(r!.party_from).toContain('นายเอ');
+    expect(r!.party_to).toContain('ร้านบี');
   });
 });

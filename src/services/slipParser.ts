@@ -144,6 +144,45 @@ function detectDirection(text: string): 'income' | 'expense' | null {
   return null;
 }
 
+const FROM_MARKERS = ['รับจาก', 'โอนโดย', 'ผู้โอน', 'จาก'];
+const TO_MARKERS = ['โอนไปที่', 'ไปยัง', 'โอนไป', 'ผู้รับ', 'ถึง', 'ร้าน', 'สาขา'];
+
+function cleanPartyName(raw: string): string | null {
+  let value = raw.replace(/^[:\-\s]+/, '').trim();
+  // Strip account refs / phone numbers / reference codes from the tail
+  value = value
+    .replace(/\b[xX×*]\d[\dxX×*\-]*\b/g, '')
+    .replace(/\d[\d\-,/]{3,}/g, '')
+    .trim();
+  if (value.length < 2 || !/[ก-๙a-zA-Z]/.test(value)) return null;
+  return value.slice(0, 60);
+}
+
+/** First line carrying one of the markers; Thai names outrank bank names. */
+function pickParty(lines: string[], markers: string[]): string | null {
+  let latinFallback: string | null = null;
+  for (const line of lines) {
+    for (const marker of markers) {
+      const idx = line.indexOf(marker);
+      if (idx < 0) continue;
+      const value = cleanPartyName(line.slice(idx + marker.length));
+      if (!value) continue;
+      if (/[ก-๙]/.test(value)) return value;
+      latinFallback ??= value;
+    }
+  }
+  return latinFallback;
+}
+
+/** Both printed parties of a transfer: who sent it and who received it. */
+export function parseParties(text: string): { from: string | null; to: string | null } {
+  const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean);
+  return {
+    from: pickParty(lines, FROM_MARKERS),
+    to: pickParty(lines, TO_MARKERS)
+  };
+}
+
 /**
  * Counterparty name (who sent / who received). Direction-aware markers and a
  * bottom-up scan: on Thai slips the "จาก/ถึง" block sits near the bottom, so
@@ -212,6 +251,7 @@ export function parseSlipFromOcr(ocrText: string): SlipExtractionResult | null {
   const date = parseThaiDate(ocrText);
   const merchant = parseCounterparty(ocrText, direction);
   const category = parseCategory(ocrText, direction, merchant);
+  const parties = parseParties(ocrText);
 
   return {
     is_slip: true,
@@ -220,6 +260,8 @@ export function parseSlipFromOcr(ocrText: string): SlipExtractionResult | null {
     merchant,
     direction,
     category,
+    party_from: parties.from,
+    party_to: parties.to,
     // Rule-based parse of templated Thai slips is reliable when amount+direction both match
     confidence: 'high'
   };

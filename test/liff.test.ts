@@ -161,10 +161,10 @@ describe('LIFF Query Layer', () => {
   });
 
   it('should look up a remembered counterparty', async () => {
-    const db = makeFakeD1([], { category: 'ขายของ', type: 'income' });
+    const db = makeFakeD1([], { category: 'ขายของ', type: 'income', seen_count: 3 });
     const contact = await findContact(db, 'U1', 'นายสมชาย');
     expect(db.calls[0].sql).toContain('FROM contact_names');
     expect(db.calls[0].params).toEqual(['U1', 'นายสมชาย']);
-    expect(contact).toEqual({ category: 'ขายของ', type: 'income' });
+    expect(contact).toEqual({ category: 'ขายของ', type: 'income', seen_count: 3 });
   });
 });

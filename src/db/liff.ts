@@ -178,24 +178,26 @@ export async function setMonthlyBudget(db: D1Database, userId: string, amount: n
     .run();
 }
 
+export type ContactRole = 'income' | 'expense' | 'self';
+
 /**
  * Counterparty memory: remember who transferred to/from the user and the
  * category last used with them, so future slips from the same person are
- * auto-categorized consistently.
+ * auto-categorized consistently. One name may hold several roles (paid them
+ * AND received from them AND their own printed name on outgoing slips).
  */
 export async function upsertContact(
   db: D1Database,
   userId: string,
   name: string,
-  type: 'income' | 'expense',
-  category: string
+  type: ContactRole,
+  category: string | null
 ): Promise<void> {
   await db
     .prepare(
       `INSERT INTO contact_names (user_id, name, type, category, seen_count, last_seen)
        VALUES (?, ?, ?, ?, 1, datetime('now'))
-       ON CONFLICT(user_id, name) DO UPDATE SET
-         type = excluded.type,
+       ON CONFLICT(user_id, name, type) DO UPDATE SET
          category = COALESCE(excluded.category, contact_names.category),
          seen_count = contact_names.seen_count + 1,
          last_seen = datetime('now')`
@@ -207,18 +209,39 @@ export async function upsertContact(
 export async function findContact(
   db: D1Database,
   userId: string,
-  name: string
-): Promise<{ category: string; type: 'income' | 'expense'; seen_count: number } | null> {
+  name: string,
+  type: ContactRole
+): Promise<{ category: string; type: ContactRole; seen_count: number } | null> {
   const row = await db
-    .prepare('SELECT category, type, seen_count FROM contact_names WHERE user_id = ? AND name = ?')
-    .bind(userId, name)
+    .prepare('SELECT category, type, seen_count FROM contact_names WHERE user_id = ? AND name = ? AND type = ?')
+    .bind(userId, name, type)
     .first();
   if (!row || row.category == null) return null;
   return {
     category: String(row.category),
-    type: row.type === 'income' ? 'income' : 'expense',
+    type: row.type as ContactRole,
     seen_count: Number(row.seen_count ?? 1)
   };
+}
+
+/** Names that belong to the account owner itself — learned from past slips + the "ชื่อ" command. */
+export async function getOwnNames(db: D1Database, userId: string): Promise<Set<string>> {
+  const names = new Set<string>();
+  try {
+    const self = await db
+      .prepare("SELECT name FROM contact_names WHERE user_id = ? AND type = 'self'")
+      .bind(userId)
+      .all();
+    (self.results || []).forEach(r => names.add(String(r.name)));
+    const profile = await db
+      .prepare('SELECT first_name FROM user_profiles WHERE user_id = ?')
+      .bind(userId)
+      .first();
+    if (profile && profile.first_name) names.add(String(profile.first_name));
+  } catch {
+    /* memory tables missing — direction inference just stays off */
+  }
+  return names;
 }
 
 /**

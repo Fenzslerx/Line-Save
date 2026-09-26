@@ -17,7 +17,7 @@ import {
   findDuplicateSlip,
   getTransactionById
 } from '../db/queries';
-import { findCategoryRule, updateTransaction, upsertContact, findContact } from '../db/liff';
+import { findCategoryRule, updateTransaction, upsertContact, findContact, getOwnNames } from '../db/liff';
 import { logEvent } from '../db/events';
 import {
   hashUserId,
@@ -82,7 +82,7 @@ async function resolveSlipCategory(
   if (merchant) {
     const rule = await findCategoryRule(db, merchant).catch(() => null);
     if (rule && rule.type === type) return rule.category;
-    const contact = await findContact(db, userId, merchant).catch(() => null);
+    const contact = await findContact(db, userId, merchant, type).catch(() => null);
     if (contact && contact.type === type) return contact.category;
   }
   return normalizeCategory(rawCategory, type);
@@ -115,29 +115,64 @@ async function saveSlipFromExtraction(
     merchant: extraction.merchant,
     date: txDate
   });
-  if (saved.id && extraction.merchant) {
-    await upsertContact(db, userId, extraction.merchant, txType, category).catch(() => {});
+  if (saved.id) {
+    // Learn the owner's own printed name: on outgoing slips it is the "จาก"
+    // side, on incoming ones the "ถึง" side — feeds the self-name direction rule.
+    if (txType === 'expense' && extraction.party_from) {
+      await upsertContact(db, userId, extraction.party_from, 'self', null).catch(() => {});
+    }
+    if (txType === 'income' && extraction.party_to) {
+      await upsertContact(db, userId, extraction.party_to, 'self', null).catch(() => {});
+    }
+    if (extraction.merchant) {
+      await upsertContact(db, userId, extraction.merchant, txType, category).catch(() => {});
+    }
   }
   return saved;
 }
 
 /**
- * Direction inference from the contact memory:
- *   - A party remembered from past EXPENSE slips (people the user pays) that
- *     now appears in the "จาก/ผู้โอน" position is SENDING money to the user
- *     → income. Requires seen_count >= 2 so one-off name collisions stay safe.
+ * Direction inference from the contact memory, in priority order:
+ *   1. TO side is the account owner's own name → the money is coming IN
+ *      (screenshots of other people's transfers say "โอนสำเร็จ" — the keyword
+ *      would mislabel them as expense).
+ *   2. FROM side is the owner's own name → outgoing, confirms expense.
+ *   3. A name remembered as an INCOME payer sits in the FROM position → income.
+ * Returns the corrected direction + counterparty, or null to keep keyword guess.
  */
 async function inferDirectionFromMemory(
   db: D1Database,
   userId: string,
   extraction: SlipExtractionResult
-): Promise<'income' | null> {
+): Promise<{ direction: 'income' | 'expense'; merchant: string | null } | null> {
   const from = extraction.party_from;
-  if (!from) return null;
-  const contact = await findContact(db, userId, from).catch(() => null);
-  if (contact && contact.type === 'expense' && contact.seen_count >= 2) {
-    logEvent(db, 'info', 'bot', 'contact_memory_income', `from=${hashUserId(from)} seen=${contact.seen_count}`);
-    return 'income';
+  const to = extraction.party_to;
+  if (!from && !to) return null;
+
+  const own = await getOwnNames(db, userId);
+  const isOwn = (n: string | null | undefined) => {
+    if (!n) return false;
+    for (const o of own) if (isInternalTransfer(o, n)) return true;
+    return false;
+  };
+  const fromOwn = isOwn(from);
+  const toOwn = isOwn(to);
+
+  if (toOwn && !fromOwn && from) {
+    logEvent(db, 'info', 'bot', 'self_rule_income', null, {});
+    return { direction: 'income', merchant: from };
+  }
+  if (fromOwn && !toOwn) {
+    logEvent(db, 'info', 'bot', 'self_rule_expense', null, {});
+    return { direction: 'expense', merchant: extraction.merchant ?? to ?? null };
+  }
+
+  if (from) {
+    const payer = await findContact(db, userId, from, 'income').catch(() => null);
+    if (payer && payer.seen_count >= 1) {
+      logEvent(db, 'info', 'bot', 'contact_memory_income', `seen=${payer.seen_count}`);
+      return { direction: 'income', merchant: from };
+    }
   }
   return null;
 }
@@ -406,12 +441,11 @@ async function handleImageMessage(
     return;
   }
 
-  // Rule 2: a name remembered from past expense slips now sits in the "จาก"
-  // position → that person is paying the user. Flip the direction to income.
+  // Rule 2: memory-based direction — own-name roles and remembered payers.
   const memoryDirection = db ? await inferDirectionFromMemory(db, userId, extraction) : null;
-  if (memoryDirection && extraction.party_from) {
-    extraction.direction = memoryDirection;
-    extraction.merchant = extraction.party_from;
+  if (memoryDirection) {
+    extraction.direction = memoryDirection.direction;
+    extraction.merchant = memoryDirection.merchant ?? extraction.merchant;
     extraction.category = null; // let the category chain re-resolve for the new type
   }
 

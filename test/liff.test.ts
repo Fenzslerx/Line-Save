@@ -156,15 +156,16 @@ describe('LIFF Query Layer', () => {
     const db = makeFakeD1();
     await upsertContact(db, 'U1', 'นายสมชาย', 'income', 'รายรับทั่วไป');
     expect(db.calls[0].sql).toContain('INSERT INTO contact_names');
-    expect(db.calls[0].sql).toContain('ON CONFLICT(user_id, name)');
+    expect(db.calls[0].sql).toContain('ON CONFLICT(user_id, name, type)');
     expect(db.calls[0].params).toEqual(['U1', 'นายสมชาย', 'income', 'รายรับทั่วไป']);
   });
 
-  it('should look up a remembered counterparty', async () => {
+  it('should look up a remembered counterparty by role', async () => {
     const db = makeFakeD1([], { category: 'ขายของ', type: 'income', seen_count: 3 });
-    const contact = await findContact(db, 'U1', 'นายสมชาย');
+    const contact = await findContact(db, 'U1', 'นายสมชาย', 'income');
     expect(db.calls[0].sql).toContain('FROM contact_names');
-    expect(db.calls[0].params).toEqual(['U1', 'นายสมชาย']);
+    expect(db.calls[0].sql).toContain('type = ?');
+    expect(db.calls[0].params).toEqual(['U1', 'นายสมชาย', 'income']);
     expect(contact).toEqual({ category: 'ขายของ', type: 'income', seen_count: 3 });
   });
 });

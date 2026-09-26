@@ -42,7 +42,8 @@ jest.mock('../src/db/liff', () => ({
   findCategoryRule: jest.fn().mockResolvedValue(null),
   updateTransaction: jest.fn().mockResolvedValue(true),
   findContact: jest.fn().mockResolvedValue(null),
-  upsertContact: jest.fn().mockResolvedValue(undefined)
+  upsertContact: jest.fn().mockResolvedValue(undefined),
+  getOwnNames: jest.fn().mockResolvedValue(new Set())
 }));
 
 // Wait for the background event processing (fired after the 200 response) to reach a mock
@@ -354,16 +355,16 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
     expect(JSON.stringify(flex)).toContain('act=dup_save');
   });
 
-  it('should flip to income when a remembered expense counterparty is now the sender', async () => {
-    const { findContact, upsertContact } = jest.requireMock('../src/db/liff');
+  it('should flip to income when the TO side is the owner own name (incoming screenshot)', async () => {
+    // Someone else transfer screenshot says "โอนสำเร็จ จาก นายสมชาย ไปยัง <ผม>" —
+    // the expense keyword would mislabel it; the self-name rule must win.
+    const { getOwnNames, upsertContact } = jest.requireMock('../src/db/liff');
     (upsertContact as jest.Mock).mockClear();
-    // The user has paid this person at least twice before (expense memory);
-    // now that person sits in the "จาก" position → they are paying the user.
-    (findContact as jest.Mock).mockResolvedValueOnce({ category: 'อื่นๆ', type: 'expense', seen_count: 2 });
+    (getOwnNames as jest.Mock).mockResolvedValueOnce(new Set(['นายเจ้าของบัญชี']));
     (extractSlipInfo as jest.Mock).mockResolvedValueOnce({
       is_slip: true, amount: 300, date: '2026-09-26', merchant: 'นายสมชาย',
       direction: 'expense', category: null, confidence: 'high',
-      party_from: 'นายสมชาย', party_to: null
+      party_from: 'นายสมชาย', party_to: 'นายเจ้าของบัญชี'
     });
     (getD1 as jest.Mock)
       .mockReturnValueOnce(makeMockD1([]))
@@ -385,6 +386,31 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
     expect(upsertContact).toHaveBeenCalledWith(
       expect.anything(), 'U_TEST_USER_001', 'นายสมชาย', 'income', expect.any(String)
     );
+  });
+
+  it('should flip to income for a remembered payer sitting in the FROM position', async () => {
+    const { findContact, upsertContact } = jest.requireMock('../src/db/liff');
+    (upsertContact as jest.Mock).mockClear();
+    (findContact as jest.Mock).mockResolvedValueOnce({ category: 'ขายของ', type: 'income', seen_count: 1 });
+    (extractSlipInfo as jest.Mock).mockResolvedValueOnce({
+      is_slip: true, amount: 300, date: '2026-09-26', merchant: 'นายสมชาย',
+      direction: 'expense', category: null, confidence: 'high',
+      party_from: 'นายสมชาย', party_to: null
+    });
+    (getD1 as jest.Mock)
+      .mockReturnValueOnce(makeMockD1([]))
+      .mockReturnValueOnce(makeMockD1([]))
+      .mockReturnValueOnce(makeMockD1([]));
+
+    const repliesBefore = (replyLineMessage as jest.Mock).mock.calls.length;
+    const res = await postWebhook(makeImageEvent('326005', '1f377ba0337f43769f6e07dd95ab0f7f', {
+      type: 'user', userId: 'U_TEST_USER_001'
+    }));
+
+    expect(res.status).toBe(200);
+    await waitForMockCalls(replyLineMessage as jest.Mock, repliesBefore + 1);
+    const flex = (replyLineMessage as jest.Mock).mock.calls[repliesBefore][1][0];
+    expect(JSON.stringify(flex)).toContain('บันทึกรายรับแล้ว');
   });
 
   it('should skip saving and notify on an own-account (cross-bank) transfer', async () => {

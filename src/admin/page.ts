@@ -62,6 +62,16 @@ tr:last-child td { border-bottom:none; }
 .live-ev { font-weight:700; font-size:12.5px; }
 .live-src { font-size:10px; background:var(--chip); border-radius:5px; padding:2px 6px; font-weight:700; white-space:nowrap; }
 .lat { color:var(--muted); font-size:11px; white-space:nowrap; }
+.livetb td { padding:4px 6px; font-size:12px; }
+.livetb th { padding:3px 6px; }
+.morebtn { border:1.5px solid var(--line); background:var(--bg); border-radius:9px; padding:5px 14px; font-size:11.5px; cursor:pointer; color:var(--ink); }
+.cols2 { display:grid; grid-template-columns:1fr 1fr; gap:0 12px; align-items:start; }
+@media (max-width:640px) { .cols2 { grid-template-columns:1fr; } }
+h2 { display:flex; align-items:center; gap:6px; }
+.chip2 { display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid var(--line); font-size:13px; }
+.chip2:last-child { border-bottom:none; }
+.chip2 .dt { color:var(--muted); font-size:11.5px; margin-left:auto; text-align:right; }
+td .detail { max-width:260px; }
 </style>
 </head>
 <body>
@@ -185,27 +195,27 @@ async function load() {
     '<h2><span class="live-dot"></span>Live · กิจกรรมล่าสุด <span class="mut" style="font-size:11px;font-weight:600;text-transform:none;letter-spacing:0" id="liveAt"></span></h2>' +
     '<div class="card" id="liveCard"><div class="empty">กำลังโหลด…</div></div>' +
     alertBanner +
+    '<div class="cols2">' +
+    '<div>' +
     '<h2>สถานะระบบ</h2>' +
     '<div class="card">' +
-      '<div class="status">' + dot(s.database.ok) + '<span class="nm">ฐานข้อมูล (D1)</span><span class="dt">' + esc(s.database.message) + '</span></div>' +
-      '<div class="status">' + dot(s.ai.key_configured) + '<span class="nm">AI · Gemini Vision</span><span class="dt">' + esc(s.ai.model) + (s.ai.key_configured ? ' · เชื่อมต่ออยู่' : ' · ⚠️ ยังไม่ตั้ง GEMINI_API_KEY') +
+      '<div class="chip2">' + dot(s.database.ok) + '<span class="nm">ฐานข้อมูล (D1)</span><span class="dt">' + esc(s.database.message) + '</span></div>' +
+      '<div class="chip2">' + dot(s.ai.key_configured) + '<span class="nm">AI · Gemini</span><span class="dt">' + esc(s.ai.model) + (s.ai.key_configured ? ' · เชื่อมต่ออยู่' : ' · ⚠️ ยังไม่ตั้ง GEMINI_API_KEY') +
         (aiLast ? '<br>เรียกล่าสุด ' + fmtT(aiLast) : '') + '</span></div>' +
-      '<div class="status">' + dot(s.typhoon.key_configured) + '<span class="nm">OCR · Typhoon</span><span class="dt">' + esc(s.typhoon.model) + ' · ' + esc(s.typhoon.pipeline) + '</span></div>' +
-      '<div class="status">' + dot(s.line.secret_configured && s.line.token_configured) + '<span class="nm">LINE Messaging API</span><span class="dt">' +
+      '<div class="chip2">' + dot(s.typhoon.key_configured) + '<span class="nm">OCR · Typhoon</span><span class="dt">' + esc(s.typhoon.model) + '</span></div>' +
+      '<div class="chip2">' + dot(s.line.secret_configured && s.line.token_configured) + '<span class="nm">LINE Messaging API</span><span class="dt">' +
         (s.line.secret_configured && s.line.token_configured ? 'พร้อมใช้งาน' : '⚠️ ตั้งค่าไม่ครบ') + '</span></div>' +
-      '<div class="status">' + dot(s.liff.id_configured) + '<span class="nm">LIFF</span><span class="dt">' +
+      '<div class="chip2">' + dot(s.liff.id_configured) + '<span class="nm">LIFF</span><span class="dt">' +
         (s.liff.id_configured ? 'ตั้งค่าแล้ว' : '⚠️ ยังไม่มี LIFF_ID') + '</span></div>' +
     '</div>' +
-
+    '</div>' +
+    '<div>' +
     metricsHtml +
-
-    '<h2>เหตุการณ์ 24 ชม. / 7 วัน</h2>' +
-    '<div class="grid" style="margin-bottom:4px">' +
-      '<div class="stat"><div class="lbl">สำเร็จ (info)</div><div class="v inf">' + fmtN(d.counts24h.info) + ' <small style="font-size:11px;color:var(--muted)">/ ' + fmtN(d.counts7d.info) + '</small></div></div>' +
-      '<div class="stat"><div class="lbl">เตือน (warn)</div><div class="v">' + fmtN(d.counts24h.warn) + ' <small style="font-size:11px;color:var(--muted)">/ ' + fmtN(d.counts7d.warn) + '</small></div></div>' +
-      '<div class="stat"><div class="lbl">ผิดพลาด (error)</div><div class="v err">' + fmtN(d.counts24h.error) + ' <small style="font-size:11px;color:var(--muted)">/ ' + fmtN(d.counts7d.error) + '</small></div></div>' +
+    '</div>' +
     '</div>' +
 
+    '<div class="cols2">' +
+    '<div>' +
     '<h2>การใช้งาน AI</h2>' +
     '<div class="card">' +
       (d.ai24h.length === 0 ? '<div class="empty">ยังไม่มีการเรียก AI ใน 24 ชม.</div>' :
@@ -214,9 +224,22 @@ async function load() {
         ).join('')) +
       '<div class="kv"><span class="mut">โมเดล</span><b>' + esc(s.ai.model) + '</b></div>' +
     '</div>' +
+    '</div>' +
+    '<div>' +
+    '<h2>เหตุการณ์ 24 ชม. / 7 วัน</h2>' +
+    '<div class="grid" style="margin-bottom:4px">' +
+      '<div class="stat"><div class="lbl">สำเร็จ (info)</div><div class="v inf">' + fmtN(d.counts24h.info) + ' <small style="font-size:11px;color:var(--muted)">/ ' + fmtN(d.counts7d.info) + '</small></div></div>' +
+      '<div class="stat"><div class="lbl">เตือน (warn)</div><div class="v">' + fmtN(d.counts24h.warn) + ' <small style="font-size:11px;color:var(--muted)">/ ' + fmtN(d.counts7d.warn) + '</small></div></div>' +
+      '<div class="stat"><div class="lbl">ผิดพลาด (error)</div><div class="v err">' + fmtN(d.counts24h.error) + ' <small style="font-size:11px;color:var(--muted)">/ ' + fmtN(d.counts7d.error) + '</small></div></div>' +
+    '</div>' +
+    '</div>' +
+    '</div>' +
 
+    '<div class="cols2">' +
+    '<div>' +
     auditHtml +
-
+    '</div>' +
+    '<div>' +
     '<h2>Error ล่าสุด (30 รายการ)</h2>' +
     '<div class="card">' +
       (d.recentErrors.length === 0 ? '<div class="empty">✨ ไม่มี error เลย — ระบบทำงานปกติ</div>' :
@@ -224,12 +247,15 @@ async function load() {
         d.recentErrors.map(e =>
           '<tr><td class="time">' + fmtT(e.ts) + '</td><td><span class="tag">' + esc(e.source) + '</span> <span class="lvl error">' + esc(e.event) + '</span></td><td class="detail">' + esc(e.detail) + '</td></tr>'
         ).join('') + '</table>') +
+    '</div>' +
+    '</div>' +
     '</div>';
   $('root').innerHTML = html;
   loadLive();
 }
 
 // ================= Live activity feed (polled every 4s) =================
+var liveLimit = 15;                 // compact by default — "แสดงเพิ่ม" expands
 var EV = {
   'message.image': 'ส่งรูปสลิป', 'message.text': 'ส่งข้อความ', 'message.sticker': 'ส่งสติกเกอร์',
   'postback': 'กดปุ่มในแชท', 'follow': 'เพิ่มเพื่อนบอท',
@@ -310,16 +336,24 @@ function loadLive() {
       rows.sort(function (a, b) { return b.sort - a.sort; });
       var card = $('liveCard');
       if (card) {
+        var shown = rows.slice(0, liveLimit);
         card.innerHTML = rows.length === 0
           ? '<div class="empty">ยังไม่มีกิจกรรมใน 6 ชม. ล่าสุด — ส่งสลิปเข้าบอทดูได้เลย</div>'
-          : '<table><tr><th>เวลา</th><th></th><th>เหตุการณ์</th><th>ผล</th><th></th></tr>' +
-            rows.slice(0, 45).map(function (x) { return '<tr>' + x.html + '</tr>'; }).join('') + '</table>';
+          : '<table class="livetb"><tr><th>เวลา</th><th></th><th>เหตุการณ์</th><th>ผล</th><th></th></tr>' +
+            shown.map(function (x) { return '<tr>' + x.html + '</tr>'; }).join('') + '</table>' +
+            (rows.length > liveLimit
+              ? '<div style="text-align:center;padding:8px 0 2px"><button class="morebtn" onclick="toggleLive()">แสดงเพิ่ม (' + (rows.length - liveLimit) + ' แถว)</button></div>'
+              : '') +
+            (liveLimit > 15
+              ? '<div style="text-align:center;padding:4px 0 0"><button class="morebtn" onclick="toggleLive()">ย่อ</button></div>'
+              : '');
       }
       var at = $('liveAt');
       if (at) at.textContent = '· อัปเดต ' + new Date(d.now * 1000).toLocaleTimeString('th-TH');
     })
     .catch(function (e) { /* transient poll failure — next tick retries */ });
 }
+function toggleLive() { liveLimit = liveLimit > 15 ? 15 : 45; loadLive(); }
 setInterval(load, 15000);        // metrics & status
 setInterval(loadLive, 4000);     // live activity feed
 // Support one-tap login links: /admin?key=... — consume the param and strip it from the URL

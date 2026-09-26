@@ -144,20 +144,36 @@ function detectDirection(text: string): 'income' | 'expense' | null {
   return null;
 }
 
-function parseMerchant(text: string, direction: 'income' | 'expense'): string | null {
+/**
+ * Counterparty name (who sent / who received). Direction-aware markers and a
+ * bottom-up scan: on Thai slips the "จาก/ถึง" block sits near the bottom, so
+ * the last matching line is the real party — not a header mention.
+ */
+export function parseCounterparty(text: string, direction: 'income' | 'expense'): string | null {
   const markers = direction === 'income'
-    ? ['รับจาก', 'จาก', 'โอนโดย', 'ผู้โอน']
-    : ['โอนไปที่', 'โอนไป', 'ถึง', 'ผู้รับ', 'ร้าน', 'สาขา', 'ที่'];
+    ? ['รับจาก', 'โอนโดย', 'ผู้โอน', 'จาก']
+    : ['โอนไปที่', 'ไปยัง', 'โอนไป', 'ผู้รับ', 'ถึง', 'ร้าน', 'สาขา'];
   const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean);
-  for (const marker of markers) {
-    for (const line of lines) {
+  let latinFallback: string | null = null;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    for (const marker of markers) {
       const idx = line.indexOf(marker);
       if (idx < 0) continue;
-      const value = line.slice(idx + marker.length).replace(/^[:\-\s]+/, '').trim();
-      if (value && value.length >= 2) return value.slice(0, 60);
+      let value = line.slice(idx + marker.length).replace(/^[:\-\s]+/, '').trim();
+      // Strip account refs / phone numbers / reference codes from the tail
+      value = value
+        .replace(/\b[xX×*]\d[\dxX×*\-]*\b/g, '')
+        .replace(/\d[\d\-,/]{3,}/g, '')
+        .trim();
+      if (value.length < 2 || !/[ก-๙a-zA-Z]/.test(value)) continue;
+      // Thai names are the counterparty on Thai slips; bank names (KBank etc.)
+      // may appear on a neighboring line — remember them only as a fallback.
+      if (/[ก-๙]/.test(value)) return value.slice(0, 60);
+      latinFallback ??= value.slice(0, 60);
     }
   }
-  return null;
+  return latinFallback;
 }
 
 const EXPENSE_CATEGORY_HINTS: [string, string[]][] = [
@@ -194,7 +210,7 @@ export function parseSlipFromOcr(ocrText: string): SlipExtractionResult | null {
   if (amount === null || amount <= 0 || !direction) return null;
 
   const date = parseThaiDate(ocrText);
-  const merchant = parseMerchant(ocrText, direction);
+  const merchant = parseCounterparty(ocrText, direction);
   const category = parseCategory(ocrText, direction, merchant);
 
   return {

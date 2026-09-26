@@ -179,6 +179,45 @@ export async function setMonthlyBudget(db: D1Database, userId: string, amount: n
 }
 
 /**
+ * Counterparty memory: remember who transferred to/from the user and the
+ * category last used with them, so future slips from the same person are
+ * auto-categorized consistently.
+ */
+export async function upsertContact(
+  db: D1Database,
+  userId: string,
+  name: string,
+  type: 'income' | 'expense',
+  category: string
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO contact_names (user_id, name, type, category, seen_count, last_seen)
+       VALUES (?, ?, ?, ?, 1, datetime('now'))
+       ON CONFLICT(user_id, name) DO UPDATE SET
+         type = excluded.type,
+         category = COALESCE(excluded.category, contact_names.category),
+         seen_count = contact_names.seen_count + 1,
+         last_seen = datetime('now')`
+    )
+    .bind(userId, name, type, category)
+    .run();
+}
+
+export async function findContact(
+  db: D1Database,
+  userId: string,
+  name: string
+): Promise<{ category: string; type: 'income' | 'expense' } | null> {
+  const row = await db
+    .prepare('SELECT category, type FROM contact_names WHERE user_id = ? AND name = ?')
+    .bind(userId, name)
+    .first();
+  if (!row || row.category == null) return null;
+  return { category: String(row.category), type: row.type === 'income' ? 'income' : 'expense' };
+}
+
+/**
  * Teach the bot: remember that a keyword maps to a category/type so future
  * manual entries and bot commands can auto-fill.
  */

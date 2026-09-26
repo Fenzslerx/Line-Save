@@ -10,7 +10,9 @@ import {
   getMonthlyBudget,
   setMonthlyBudget,
   saveCategoryRule,
-  findCategoryRule
+  findCategoryRule,
+  upsertContact,
+  findContact
 } from '../src/db/liff';
 
 function makeFakeD1(rows: any[] = [], firstRow: any = null) {
@@ -148,5 +150,21 @@ describe('LIFF Query Layer', () => {
     await saveCategoryRule(db, 'กาแฟ', 'อาหารและเครื่องดื่ม', 'expense');
     expect(db.calls[0].sql).toContain('ON CONFLICT(keyword)');
     expect(db.calls[0].params).toEqual(['กาแฟ', 'อาหารและเครื่องดื่ม', 'expense']);
+  });
+
+  it('should remember transfer counterparties per user', async () => {
+    const db = makeFakeD1();
+    await upsertContact(db, 'U1', 'นายสมชาย', 'income', 'รายรับทั่วไป');
+    expect(db.calls[0].sql).toContain('INSERT INTO contact_names');
+    expect(db.calls[0].sql).toContain('ON CONFLICT(user_id, name)');
+    expect(db.calls[0].params).toEqual(['U1', 'นายสมชาย', 'income', 'รายรับทั่วไป']);
+  });
+
+  it('should look up a remembered counterparty', async () => {
+    const db = makeFakeD1([], { category: 'ขายของ', type: 'income' });
+    const contact = await findContact(db, 'U1', 'นายสมชาย');
+    expect(db.calls[0].sql).toContain('FROM contact_names');
+    expect(db.calls[0].params).toEqual(['U1', 'นายสมชาย']);
+    expect(contact).toEqual({ category: 'ขายของ', type: 'income' });
   });
 });

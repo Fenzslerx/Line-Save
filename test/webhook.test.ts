@@ -40,7 +40,9 @@ jest.mock('../src/db/client', () => ({
 // auto-save flow is deterministic; specific tests override the return value.
 jest.mock('../src/db/liff', () => ({
   findCategoryRule: jest.fn().mockResolvedValue(null),
-  updateTransaction: jest.fn().mockResolvedValue(true)
+  updateTransaction: jest.fn().mockResolvedValue(true),
+  findContact: jest.fn().mockResolvedValue(null),
+  upsertContact: jest.fn().mockResolvedValue(undefined)
 }));
 
 // Wait for the background event processing (fired after the 200 response) to reach a mock

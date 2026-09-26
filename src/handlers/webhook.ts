@@ -17,7 +17,7 @@ import {
   findDuplicateSlip,
   getTransactionById
 } from '../db/queries';
-import { findCategoryRule, updateTransaction } from '../db/liff';
+import { findCategoryRule, updateTransaction, upsertContact, findContact } from '../db/liff';
 import { logEvent } from '../db/events';
 import {
   hashUserId,
@@ -67,10 +67,14 @@ function tryLogDupBatchAutoSaved(db: D1Database | null, requestId: string, dupli
 }
 
 /**
- * Category for a parsed slip: a user-taught rule (LIFF) wins, then the LLM's
- * normalized guess.
- */async function resolveSlipCategory(
+ * Category for a parsed slip, in priority order:
+ *   1. a rule the user taught via LIFF
+ *   2. contact memory — the category last used with this counterparty
+ *   3. the rule-based/LLM category guess
+ */
+async function resolveSlipCategory(
   db: D1Database,
+  userId: string,
   merchant: string | null,
   rawCategory: string | null,
   type: 'income' | 'expense'
@@ -78,13 +82,16 @@ function tryLogDupBatchAutoSaved(db: D1Database | null, requestId: string, dupli
   if (merchant) {
     const rule = await findCategoryRule(db, merchant).catch(() => null);
     if (rule && rule.type === type) return rule.category;
+    const contact = await findContact(db, userId, merchant).catch(() => null);
+    if (contact && contact.type === type) return contact.category;
   }
   return normalizeCategory(rawCategory, type);
 }
 
 /**
  * Persists a parsed slip as a transaction. Shared by the auto-save pipeline
- * and the "บันทึกอยู่ดี" postback on the duplicate-warning card.
+ * and the "บันทึกอยู่ดี" postback on the duplicate-warning card. Every saved
+ * slip also updates the counterparty memory (contact_names).
  */
 async function saveSlipFromExtraction(
   db: D1Database,
@@ -97,9 +104,9 @@ async function saveSlipFromExtraction(
     throw new Error('slip amount missing');
   }
   const txType: 'income' | 'expense' = extraction.direction === 'income' ? 'income' : 'expense';
-  const category = precomputedCategory ?? (await resolveSlipCategory(db, extraction.merchant, extraction.category, txType));
+  const category = precomputedCategory ?? (await resolveSlipCategory(db, userId, extraction.merchant, extraction.category, txType));
   const txDate = extraction.date || new Date().toISOString().split('T')[0];
-  return createTransaction(db, {
+  const saved = await createTransaction(db, {
     line_user_id: userId,
     line_group_id: groupId,
     amount: extraction.amount,
@@ -108,6 +115,10 @@ async function saveSlipFromExtraction(
     merchant: extraction.merchant,
     date: txDate
   });
+  if (saved.id && extraction.merchant) {
+    await upsertContact(db, userId, extraction.merchant, txType, category).catch(() => {});
+  }
+  return saved;
 }
 
 /**
@@ -354,7 +365,7 @@ async function handleImageMessage(
 
   // Category priority: a rule the user taught via LIFF > the LLM's guess > "อื่นๆ"
   const saveDb = db ?? getD1();
-  const category = await resolveSlipCategory(saveDb, extraction.merchant, extraction.category, txType);
+  const category = await resolveSlipCategory(saveDb, userId, extraction.merchant, extraction.category, txType);
 
   // Content-based dedup: same user + type + amount + date + merchant already
   // saved means this is very likely the same slip sent again (re-screenshot,

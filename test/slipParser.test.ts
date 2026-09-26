@@ -2,6 +2,7 @@ import {
   parseSlipFromOcr,
   parseAmount,
   parseThaiDate,
+  parseCounterparty,
   bahtMarkedAmounts
 } from '../src/services/slipParser';
 
@@ -97,5 +98,41 @@ describe('AI-free slip parser (rule-based, from Typhoon OCR text)', () => {
 
   it('should parse ISO dates printed on slips', () => {
     expect(parseThaiDate('วันที่ 2026-09-23 12:00')).toBe('2026-09-23');
+  });
+
+  it('should take the sender name from the bottom block on income slips', () => {
+    const text = [
+      'KBank',
+      'เงินเข้า รับโอนพร้อมเพย์',
+      'จำนวนเงิน 1,200.00 บาท',
+      'วันที่ 26/09/2569 18:44',
+      'เลขที่อ้างอิง 2509261200448812',
+      'จาก นายสมชาย ใจดี',
+      'ผู้โอน KBank x1234'
+    ].join('\n');
+    const r = parseSlipFromOcr(text);
+    expect(r).not.toBeNull();
+    expect(r!.direction).toBe('income');
+    // Bottom-up scan: the last จาก/ผู้โอน line wins, account refs stripped
+    expect(r!.merchant).toContain('นายสมชาย');
+  });
+
+  it('should take the receiver name from the bottom block on expense slips', () => {
+    const text = [
+      'SCB EASY',
+      'โอนเงินสำเร็จ',
+      'จำนวนเงิน 500 บาท',
+      'วันที่ 26/09/2569',
+      'จาก นางสาวบี',
+      'ไปยัง ร้านอาหารตามสั่ง สาขา 2'
+    ].join('\n');
+    const r = parseSlipFromOcr(text);
+    expect(r).not.toBeNull();
+    expect(r!.direction).toBe('expense');
+    expect(r!.merchant).toContain('ร้านอาหารตามสั่ง');
+  });
+
+  it('should strip account refs from counterparty names', () => {
+    expect(parseCounterparty('จาก นายสมชาย ใจดี x1234', 'income')).toBe('นายสมชาย ใจดี');
   });
 });

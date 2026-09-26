@@ -132,18 +132,7 @@ export function createAutoSavedFlex(data: AutoSavedData): messagingApi.FlexMessa
         contents: [
           { type: 'text', text: 'LineSave', size: 'sm', weight: 'bold', color: accent, flex: 0 },
           { type: 'filler', flex: 1 },
-          {
-            type: 'box',
-            layout: 'horizontal',
-            backgroundColor: '#FFFFFF',
-            cornerRadius: '12px',
-            paddingAll: '5px',
-            paddingStart: '10px', paddingEnd: '10px',
-            flex: 0,
-            contents: [
-              { type: 'text', text: statusText, size: 'xs', weight: 'bold', color: accent }
-            ]
-          }
+          { type: 'text', text: statusText, size: 'xs', weight: 'bold', color: accent, flex: 0 }
         ]
       },
       body: {

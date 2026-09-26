@@ -239,6 +239,24 @@ export interface Alert {
 export async function getAlerts(db: D1Database): Promise<Alert[]> {
   const alerts: Alert[] = [];
 
+  // Gemini quota exhausted — slips cannot be read until the quota resets
+  // (daily reset) or billing is enabled. This must be loud, not a silent
+  // stream of "not a slip" verdicts.
+  const quotaRow = await db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM system_events
+       WHERE event = 'gemini_quota_exceeded' AND ts >= ?`
+    )
+    .bind(cutoffOf(6 * HOUR))
+    .first();
+  if (Number(quotaRow?.n ?? 0) > 0) {
+    alerts.push({
+      level: 'critical',
+      name: 'โควตา Gemini หมด',
+      detail: `API คืน 429 quota ${Number(quotaRow?.n ?? 0)} ครั้งใน 6 ชม. — สลิปจะไม่ถูกอ่านจนกว่าโควตาจะรีเซ็ตหรือเปิดบิล (billing)`
+    });
+  }
+
   const ocr = await getOcrStats(db);
   if (ocr.ok + ocr.fail >= 5 && ocr.failRate1h > 0.2) {
     alerts.push({

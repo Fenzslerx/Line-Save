@@ -300,16 +300,24 @@ export async function extractSlipInfo(
         attempt--;
         continue;
       }
+      const msg = String(error?.message || '');
+      // Quota exhausted (daily/plan limit) — retrying within this request cannot
+      // succeed and only burns more of the remaining quota. Fail fast.
+      if (error?.status === 429 && /quota|billing/i.test(msg)) {
+        tryLog('error', 'gemini_quota_exceeded', msg.slice(0, 200));
+        console.error('[Vision Service] Gemini quota exceeded — failing fast.');
+        break;
+      }
       // Retry on 5xx, rate limits, JSON parsing errors or empty responses
       const isRetryable =
         error?.status === 503 ||
         error?.status === 500 ||
         error?.status === 429 ||
-        /gemini_empty_response/.test(String(error?.message || '')) ||
+        /gemini_empty_response/.test(msg) ||
         error instanceof SyntaxError;
       if (isRetryable && attempt < MAX_RETRIES) {
-        console.warn(`[Vision Service] Attempt ${attempt} failed: ${error.message}. Retrying in 0.8s...`);
-        await new Promise(resolve => setTimeout(resolve, 800));
+        console.warn(`[Vision Service] Attempt ${attempt} failed: ${error.message}. Retrying...`);
+        await new Promise(resolve => setTimeout(resolve, error?.status === 429 ? 2000 : 800));
       } else {
         break; // Stop retrying
       }

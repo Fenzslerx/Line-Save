@@ -125,6 +125,23 @@ export function parseAmount(text: string): number | null {
   return best ? best.amount : null;
 }
 
+/**
+ * Fallback for PromptPay/QR e-slips that print the amount WITHOUT a currency
+ * marker, e.g. "ยอดเงิน 300.00" or "จำนวนเงิน : 1,250.00" — take the bare
+ * number directly after an amount keyword.
+ */
+export function parseBareAmount(text: string): number | null {
+  for (const kw of AMOUNT_KEYWORDS) {
+    const re = new RegExp(kw + '\\s*[:\\-]?\\s*([\\d][\\d,]*(?:\\.\\d{1,2})?)', 'g');
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      const value = parseFloat(m[1].replace(/,/g, ''));
+      if (Number.isFinite(value) && value > 0) return value;
+    }
+  }
+  return null;
+}
+
 function detectDirection(text: string): 'income' | 'expense' | null {
   const has = (hints: string[]) => hints.some(h => text.toLowerCase().includes(h.toLowerCase()));
   const income = has(INCOME_HINTS);
@@ -244,7 +261,7 @@ function parseCategory(text: string, direction: 'income' | 'expense', merchant: 
 export function parseSlipFromOcr(ocrText: string): SlipExtractionResult | null {
   if (!ocrText || ocrText.length < 15) return null;
 
-  const amount = parseAmount(ocrText);
+  const amount = parseAmount(ocrText) ?? parseBareAmount(ocrText);
   const direction = detectDirection(ocrText);
   if (amount === null || amount <= 0 || !direction) return null;
 

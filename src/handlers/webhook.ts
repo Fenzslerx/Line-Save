@@ -377,7 +377,9 @@ async function handleImageMessage(
   await markStage('extracting');
   // Identical slip images resolve instantly from cache instead of calling the LLM again.
   // A cache hit also means this exact photo was sent before — a strong duplicate signal.
-  const imageHash = `img:${crypto.createHash('sha256').update(imageBuffer).digest('hex')}`;
+  // v2 prefix: old entries (without party_from/party_to) must not shadow the
+  // new pipeline during their 24h TTL.
+  const imageHash = `img2:${crypto.createHash('sha256').update(imageBuffer).digest('hex')}`;
   const cachedHit = db ? await getCachedExtraction(db, imageHash).catch(() => null) : null;
   const imageReplay = Boolean(cachedHit);
   let extraction: SlipExtractionResult | null = cachedHit;

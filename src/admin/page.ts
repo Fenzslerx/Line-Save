@@ -72,6 +72,25 @@ h2 { display:flex; align-items:center; gap:6px; }
 .chip2:last-child { border-bottom:none; }
 .chip2 .dt { color:var(--muted); font-size:11.5px; margin-left:auto; text-align:right; }
 td .detail { max-width:260px; }
+@media (max-width:560px) {
+  body { padding:14px 8px 32px; }
+  h1 { font-size:17px; }
+  .wrap { max-width:100%; }
+  .card { padding:12px 11px; border-radius:13px; }
+  table { font-size:11.5px; }
+  th { font-size:10px; padding:3px 4px; }
+  td { padding:5px 4px; }
+  td .detail { max-width:130px; }
+  .livetb td, .livetb th { padding:4px 3px; }
+  .livetb .lat, .livetb th.lat, .livetb .latsrc { display:none; }
+  .stat .v { font-size:17px; }
+  .grid { gap:6px; }
+  .kv { font-size:12px; }
+  .kv .mut { font-size:10.5px; }
+  .status .nm, .chip2 .nm { min-width:96px; font-size:12.5px; }
+  .chip2 .dt { font-size:10.5px; }
+  .cols2 { grid-template-columns:1fr; }
+}
 </style>
 </head>
 <body>
@@ -339,7 +358,7 @@ function loadLive() {
         var shown = rows.slice(0, liveLimit);
         card.innerHTML = rows.length === 0
           ? '<div class="empty">ยังไม่มีกิจกรรมใน 6 ชม. ล่าสุด — ส่งสลิปเข้าบอทดูได้เลย</div>'
-          : '<table class="livetb"><tr><th>เวลา</th><th></th><th>เหตุการณ์</th><th>ผล</th><th></th></tr>' +
+          : '<table class="livetb"><tr><th>เวลา</th><th></th><th>เหตุการณ์</th><th>ผล</th><th class="lat"></th></tr>' +
             shown.map(function (x) { return '<tr>' + x.html + '</tr>'; }).join('') + '</table>' +
             (rows.length > liveLimit
               ? '<div style="text-align:center;padding:8px 0 2px"><button class="morebtn" onclick="toggleLive()">แสดงเพิ่ม (' + (rows.length - liveLimit) + ' แถว)</button></div>'

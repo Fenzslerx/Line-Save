@@ -133,6 +133,14 @@ describe('AI-free slip parser (rule-based, from Typhoon OCR text)', () => {
     expect(r!.merchant).toContain('ร้านอาหารตามสั่ง');
   });
 
+  it('should read amounts printed WITHOUT a currency marker (PromptPay QR slips)', () => {
+    const r = parseSlipFromOcr('พร้อมเพย์\nโอนสำเร็จ\nยอดเงิน 300.00\nวันที่ 26/09/2569\nจาก นายสมชาย\nไปยัง นายเจ้าของบัญชี');
+    expect(r).not.toBeNull();
+    expect(r!.amount).toBe(300);
+    expect(r!.direction).toBe('expense');
+    expect(r!.party_to).toContain('นายเจ้าของบัญชี');
+  });
+
   it('should strip account refs from counterparty names', () => {
     expect(parseCounterparty('จาก นายสมชาย ใจดี x1234', 'income')).toBe('นายสมชาย ใจดี');
   });

@@ -51,13 +51,17 @@ Your job is to examine the provided slip (as OCR text, an image, or both) and ex
   "merchant": string | null,
   "direction": "income" | "expense" | null,
   "category": string | null,
-  "confidence": "high" | "medium" | "low"
+  "confidence": "high" | "medium" | "low",
+  "party_from": string | null,
+  "party_to": string | null
 }
 
 Rules:
 1. "is_slip":
    - Set to true ONLY if the input is a valid bank transfer slip, payment confirmation, or purchase receipt.
    - Set to false if it is anything else (e.g. memes, cat/dog photos, landscapes, selfies, arbitrary text/screenshots).
+2. "party_from": the SENDER of the money — the name printed after "จาก", "โอนโดย", "ผู้โอน" (or null if absent).
+3. "party_to": the RECEIVER of the money — the name printed after "ถึง", "ไปยัง", "โอนไปที่", "ผู้รับ" (or null if absent).
 2. "amount":
    - The final transferred or paid amount in Thai Baht (numeric float/integer, no commas or currency symbols).
    - If not found or not a slip, set to null.
@@ -109,10 +113,12 @@ const SLIP_RESPONSE_SCHEMA = {
     merchant: { type: Type.STRING, nullable: true },
     direction: { type: Type.STRING, enum: ['income', 'expense'], nullable: true },
     category: { type: Type.STRING, nullable: true },
-    confidence: { type: Type.STRING, enum: ['high', 'medium', 'low'] }
+    confidence: { type: Type.STRING, enum: ['high', 'medium', 'low'] },
+    party_from: { type: Type.STRING, nullable: true },
+    party_to: { type: Type.STRING, nullable: true }
   },
-  required: ['is_slip', 'amount', 'date', 'merchant', 'direction', 'category', 'confidence'],
-  propertyOrdering: ['is_slip', 'amount', 'date', 'merchant', 'direction', 'category', 'confidence']
+  required: ['is_slip', 'amount', 'date', 'merchant', 'direction', 'category', 'confidence', 'party_from', 'party_to'],
+  propertyOrdering: ['is_slip', 'amount', 'date', 'merchant', 'direction', 'category', 'confidence', 'party_from', 'party_to']
 };
 
 /**
@@ -273,7 +279,9 @@ export async function extractSlipInfo(
         merchant: parsed.merchant ? String(parsed.merchant).trim() : null,
         direction: parsed.direction === 'income' || parsed.direction === 'expense' ? parsed.direction : null,
         category: parsed.category && typeof parsed.category === 'string' ? parsed.category.trim() : null,
-        confidence: ['high', 'medium', 'low'].includes(parsed.confidence) ? parsed.confidence : 'low'
+        confidence: ['high', 'medium', 'low'].includes(parsed.confidence) ? parsed.confidence : 'low',
+        party_from: parsed.party_from ? String(parsed.party_from).trim() : null,
+        party_to: parsed.party_to ? String(parsed.party_to).trim() : null
       };
 
       postValidate(result, ocrText);

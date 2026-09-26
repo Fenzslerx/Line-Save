@@ -31,8 +31,7 @@ import {
 import {
   createAutoSavedFlex,
   createSummaryFlex,
-  createDuplicateSlipFlex,
-  createDirectionConfirmFlex
+  createDuplicateSlipFlex
 } from '../templates/flex';
 
 const EXPENSE_CATEGORIES = ['อาหารและเครื่องดื่ม', 'การเดินทาง', 'ของใช้ทั่วไป', 'บิลและสาธารณูปโภค', 'อื่นๆ'];
@@ -512,44 +511,6 @@ async function handleImageMessage(
   // Category priority: a rule the user taught via LIFF > the LLM's guess > "อื่นๆ"
   const saveDb = db ?? getD1();
   const category = await resolveSlipCategory(saveDb, userId, extraction.merchant, extraction.category, txType);
-
-  // Direction trust check — transfer slips naming two parties, NEITHER of which
-  // matches the account owner (and no payer memory), cannot be placed: it could
-  // be the user's outgoing slip OR an incoming screenshot from someone else.
-  // In that case never guess: ask with one tap. Wrong rows must not be written.
-  let directionSure: boolean;
-  if (memoryDirection) {
-    directionSure = true; // self-name or payer history decided it
-  } else if (extraction.party_from && extraction.party_to) {
-    directionSure = false; // two named parties, neither recognized as self
-  } else if (extraction.party_from || extraction.party_to) {
-    // One named party that is not self: income keyword is trustworthy,
-    // expense keyword on someone else's transfer screenshot is exactly the
-    // failing case — ask.
-    directionSure = extraction.direction === 'income';
-  } else {
-    directionSure = true; // merchant receipt / QR payment without party lines
-  }
-
-  if (!directionSure && db) {
-    await setSlipStage(db, messageId, 'awaiting_confirm', 'pending', userId);
-    logStage(db, requestId, 'direction_unsure', { guessed: txType });
-    console.log(`[Slip Detection] [${requestId}] Direction unsure (${txType}) — asking user.`);
-    try {
-      await replyLineMessage(replyToken, [
-        createDirectionConfirmFlex({
-          amount: extraction.amount,
-          category,
-          merchant: extraction.merchant,
-          date: txDate,
-          messageId
-        })
-      ]);
-    } finally {
-      await finishRequest(db, requestId, 'ignored', Date.now() - requestStart, 'awaiting_direction');
-    }
-    return;
-  }
 
   // Content-based dedup: same user + type + amount + date + merchant already
   // saved means this is very likely the same slip sent again (re-screenshot,

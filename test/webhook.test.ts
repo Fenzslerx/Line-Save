@@ -518,7 +518,9 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
     expect(reply.text).toContain('จดจำชื่อบัญชี');
   });
 
-  it('should ask for direction (not save) when a transfer slip names two unknown parties', async () => {
+  it('should auto-save ambiguous transfer slips with the best guess (no asking)', async () => {
+    // Two named parties, neither recognized — with the confirm gate removed the
+    // system auto-saves its best guess; the receipt card's fix buttons correct it.
     const { upsertContact } = jest.requireMock('../src/db/liff');
     (upsertContact as jest.Mock).mockClear();
     (extractSlipInfo as jest.Mock).mockResolvedValueOnce({
@@ -538,13 +540,10 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
 
     expect(res.status).toBe(200);
     await waitForMockCalls(replyLineMessage as jest.Mock, repliesBefore + 1);
-
     const flex = (replyLineMessage as jest.Mock).mock.calls[repliesBefore][1][0];
-    const flexJson = JSON.stringify(flex);
-    expect(flexJson).toContain('ยืนยันประเภทรายการ');
-    expect(flexJson).toContain('act=confirm_type');
-    // Nothing was written — the row is only created after the user taps
-    expect(upsertContact).not.toHaveBeenCalled();
+    expect(JSON.stringify(flex)).toContain('บันทึกรายจ่ายแล้ว');
+    // fix buttons remain on the card for one-tap correction
+    expect(JSON.stringify(flex)).toContain('act=set_type');
   });
 
   it('should save with the chosen direction on confirm_type and teach the memory', async () => {

@@ -178,10 +178,15 @@ async function inferDirectionFromMemory(
 }
 
 function normalizeName(name: string): string {
-  return name
-    .replace(/^(นาย|นางสาว|นาง|ว่าที่)/, '')
-    .replace(/[\s.:\-]/g, '')
-    .toLowerCase();
+  let n = String(name || '');
+  let prev = '';
+  // Strip titles repeatedly (ว่าที่ ร.ต. อ., นายสมชาย, คุณสมชาย ...)
+  while (n !== prev) {
+    prev = n;
+    n = n.replace(/^(ว่าที่|นาย|นางสาว|นาง|ด\.ต\.|จ\.อ\.|ร\.ต\.|ส\.อ\.|พ\.ต\.|ม\.ล\.|ม\.จ\.|คุณ)\s*/i, '');
+  }
+  n = n.replace(/[\s.:\-]/g, '').toLowerCase();
+  return n.trim();
 }
 
 /** Same party on both sides of a transfer slip → internal (own-account) transfer. */
@@ -192,7 +197,7 @@ function isInternalTransfer(a: string, b: string): boolean {
   if (na === nb) return true;
   const short = na.length <= nb.length ? na : nb;
   const long = na.length <= nb.length ? nb : na;
-  return short.length >= 5 && long.includes(short);
+  return short.length >= 4 && long.includes(short);
 }
 
 /**
@@ -541,7 +546,8 @@ async function handleImageMessage(
     date: saved.date,
     type: saved.type,
     category: saved.category ?? 'อื่นๆ',
-    txId: saved.id
+    txId: saved.id,
+    messageId
   });
 
   try {
@@ -568,6 +574,20 @@ async function handleTextMessage(
 ) {
   const text = (event.message.text || '').trim();
   const replyToken = event.replyToken;
+
+  // Command: register the account owner's printed name — the strongest signal
+  // for income/expense direction ("ถึง <ชื่อนี้>" = money coming in).
+  const accountMatch = text.match(/^(?:ชื่อบัญชี|บัญชีชื่อ)\s+(.+)$/i);
+  if (accountMatch && userId) {
+    const name = accountMatch[1].trim().slice(0, 60);
+    const dbCmd = getD1();
+    await upsertContact(dbCmd, userId, name, 'self', null).catch(() => {});
+    await upsertUser(dbCmd, { line_user_id: userId, nickname: name }).catch(() => {});
+    await replyLineMessage(replyToken, [
+      { type: 'text', text: `จดจำชื่อบัญชี "${name}" แล้วครับ ✅\nสลิปที่มีชื่อนี้อยู่ฝั่ง "ถึง" จะถูกบันทึกเป็นรายรับ และฝั่ง "จาก" เป็นรายจ่าย\nลงทะเบียนได้หลายชื่อ — พิมพ์ ชื่อบัญชี <ชื่ออื่น> เพิ่มได้เลย` }
+    ]);
+    return;
+  }
 
   // Command: Set Nickname
   const nameMatch = text.match(/^(?:ชื่อ|name)\s+(.+)$/i);
@@ -658,7 +678,7 @@ async function handlePostback(
   const groupId = event.source?.groupId || event.source?.roomId || null;
 
   try {
-    if (act === 'toggle_type') {
+    if (act === 'toggle_type' || act === 'set_type') {
       const txId = params.get('tx') || '';
       if (!userId || !txId) {
         await replyLineMessage(replyToken, [{ type: 'text', text: 'ใช้ปุ่มนี้ไม่ได้ในบริบทนี้ครับ' }]);
@@ -669,13 +689,32 @@ async function handlePostback(
         await replyLineMessage(replyToken, [{ type: 'text', text: 'ไม่พบรายการนี้ หรือไม่ใช่รายการของคุณครับ' }]);
         return;
       }
-      const newType: 'income' | 'expense' = tx.type === 'income' ? 'expense' : 'income';
+      // set_type fixes to the tapped direction; legacy toggle_type flips
+      const newType: 'income' | 'expense' = act === 'set_type'
+        ? (params.get('t') === 'income' ? 'income' : 'expense')
+        : (tx.type === 'income' ? 'expense' : 'income');
       const txCategory = tx.category ?? 'อื่นๆ';
       const fields: { type: 'income' | 'expense'; category?: string } = { type: newType };
       // Keep the category plausible for the new type
       if (newType === 'income' && !INCOME_CATEGORIES.includes(txCategory)) fields.category = 'รายรับทั่วไป';
       if (newType === 'expense' && !EXPENSE_CATEGORIES.includes(txCategory)) fields.category = 'อื่นๆ';
       await updateTransaction(db, userId, txId, fields);
+      // Teach the memory from every correction: the slip's printed parties map
+      // to self/payer/payee roles according to the user's verdict.
+      const msgId = params.get('msg') || '';
+      if (msgId) {
+        const extraction = await getCachedExtraction(db, `msg:${msgId}`).catch(() => null);
+        if (extraction && extraction.is_slip) {
+          const finalCategory = fields.category ?? txCategory;
+          if (newType === 'income') {
+            if (extraction.party_to) await upsertContact(db, userId, extraction.party_to, 'self', null).catch(() => {});
+            if (extraction.party_from) await upsertContact(db, userId, extraction.party_from, 'income', finalCategory).catch(() => {});
+          } else {
+            if (extraction.party_from) await upsertContact(db, userId, extraction.party_from, 'self', null).catch(() => {});
+            if (extraction.party_to) await upsertContact(db, userId, extraction.party_to, 'expense', finalCategory).catch(() => {});
+          }
+        }
+      }
       // Re-send the saved card so the user sees the flip with the right color
       // (green for income, red for expense) and can toggle again if needed.
       const newCategory = fields.category ?? tx.category ?? 'อื่นๆ';
@@ -686,7 +725,8 @@ async function handlePostback(
           date: tx.date,
           type: newType,
           category: newCategory,
-          txId: tx.id
+          txId: tx.id,
+          messageId: msgId || null
         })
       ]);
       return;

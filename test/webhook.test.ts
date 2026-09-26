@@ -174,12 +174,13 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
     expect(flexJson).toContain('GrabFood');
     // Header shows expense sign and amount
     expect(flexJson).toContain('−฿500');
-    // Exactly one LIFF button plus the type-toggle postback button
+    // Exactly one LIFF button plus the two direction-fix postback buttons
     const buttons = JSON.stringify(flex).match(/"type":"uri"/g) || [];
     expect(buttons).toHaveLength(1);
     expect(flexJson).toContain('https://liff.line.me/TEST_LIFF_ID');
-    // The type-toggle postback lets the user flip income <-> expense
-    expect(flexJson).toContain('act=toggle_type&tx=');
+    // Direction fix buttons let the user correct income <-> expense in one tap
+    expect(flexJson).toContain('act=set_type&tx=');
+    expect(flexJson).toContain('t=income');
   });
 
   it('should prefer a user-taught category rule over the LLM guess', async () => {
@@ -440,6 +441,83 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
     expect(upsertContact).not.toHaveBeenCalled();
   });
 
+  it('should fix the type via set_type and learn roles from the correction', async () => {
+    const txRow = {
+      id: 'TX_FIX_1', user_id: 'U_TEST_USER_001', group_id: null, type: 'expense',
+      category: 'อื่นๆ', amount: 300, merchant: 'นายสมชาย', date: '2026-09-26'
+    };
+    const cachedExtraction = {
+      is_slip: true, amount: 300, date: '2026-09-26', merchant: 'นายสมชาย',
+      direction: 'expense', category: 'อื่นๆ', confidence: 'high',
+      party_from: 'นายสมชาย', party_to: 'นายเจ้าของบัญชี'
+    };
+    (getD1 as jest.Mock)
+      .mockReturnValueOnce(makeMockD1([])) // request log handle
+      .mockReturnValueOnce(makeMockD1([])) // auto-record user
+      .mockReturnValueOnce(makeMockD1([], {
+        U_TEST: [txRow],
+        'msg:': [{ result_json: JSON.stringify(cachedExtraction) }]
+      }));
+
+    const repliesBefore = (replyLineMessage as jest.Mock).mock.calls.length;
+    const res = await postWebhook({
+      destination: 'U1234567890abcdef',
+      events: [
+        {
+          type: 'postback',
+          postback: { data: 'act=set_type&tx=TX_FIX_1&t=income&msg=633466000' },
+          timestamp: 1625097612000,
+          source: { type: 'user', userId: 'U_TEST_USER_001' },
+          replyToken: 'df377ba0337f43769f6e07dd95ab0f7b',
+          mode: 'active'
+        }
+      ]
+    });
+
+    expect(res.status).toBe(200);
+    await waitForMockCalls(replyLineMessage as jest.Mock, repliesBefore + 1);
+
+    const { updateTransaction, upsertContact } = jest.requireMock('../src/db/liff');
+    expect(updateTransaction).toHaveBeenCalledWith(
+      expect.anything(), 'U_TEST_USER_001', 'TX_FIX_1',
+      expect.objectContaining({ type: 'income' })
+    );
+    // Correction teaches the memory: receiver becomes self, sender becomes a payer
+    expect(upsertContact).toHaveBeenCalledWith(expect.anything(), 'U_TEST_USER_001', 'นายเจ้าของบัญชี', 'self', null);
+    expect(upsertContact).toHaveBeenCalledWith(expect.anything(), 'U_TEST_USER_001', 'นายสมชาย', 'income', 'อื่นๆ');
+    const flex = (replyLineMessage as jest.Mock).mock.calls[repliesBefore][1][0];
+    expect(JSON.stringify(flex)).toContain('บันทึกรายรับแล้ว');
+  });
+
+  it('should register the owner account name via the ชื่อบัญชี command', async () => {
+    (getD1 as jest.Mock)
+      .mockReturnValueOnce(makeMockD1([])) // request log handle
+      .mockReturnValueOnce(makeMockD1([])) // auto-record user
+      .mockReturnValueOnce(makeMockD1([])); // upsertContact self + upsertUser nickname
+
+    const repliesBefore = (replyLineMessage as jest.Mock).mock.calls.length;
+    const res = await postWebhook({
+      destination: 'U1234567890abcdef',
+      events: [
+        {
+          type: 'message',
+          message: { type: 'text', id: '326006', text: 'ชื่อบัญชี นายสมชาย ใจดี' },
+          timestamp: 1625097650000,
+          source: { type: 'user', userId: 'U_TEST_USER_001' },
+          replyToken: 'ef377ba0337f43769f6e07dd95ab0f7c',
+          mode: 'active'
+        }
+      ]
+    });
+
+    expect(res.status).toBe(200);
+    await waitForMockCalls(replyLineMessage as jest.Mock, repliesBefore + 1);
+    const { upsertContact } = jest.requireMock('../src/db/liff');
+    expect(upsertContact).toHaveBeenCalledWith(expect.anything(), 'U_TEST_USER_001', 'นายสมชาย ใจดี', 'self', null);
+    const reply = (replyLineMessage as jest.Mock).mock.calls[repliesBefore][1][0];
+    expect(reply.text).toContain('จดจำชื่อบัญชี');
+  });
+
   it('should flip a transaction to income via the toggle_type postback', async () => {
     const txRow = {
       id: 'TX_TOGGLE_1', user_id: 'U_TEST_USER_001', group_id: null, type: 'expense',
@@ -473,13 +551,13 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
       expect.anything(), 'U_TEST_USER_001', 'TX_TOGGLE_1',
       expect.objectContaining({ type: 'income', category: 'รายรับทั่วไป' })
     );
-    // A fresh saved card is re-sent: income header is green and the toggle
-    // button now offers flipping back to expense
+    // A fresh saved card is re-sent: income header is green and the fix
+    // buttons now offer switching back to expense
     const flex = (replyLineMessage as jest.Mock).mock.calls[repliesBefore][1][0];
     const flexJson = JSON.stringify(flex);
     expect(flexJson).toContain('#0E9F6E');
     expect(flexJson).toContain('บันทึกรายรับแล้ว');
-    expect(flexJson).toContain('สลับเป็นรายจ่าย');
+    expect(flexJson).toContain('t=expense');
   });
 
   it('should return 200 for health check', async () => {

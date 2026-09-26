@@ -7,8 +7,10 @@ export interface AutoSavedData {
   date: string;
   type: 'expense' | 'income';
   category: string;
-  /** Set when the caller knows the saved row id — enables the type-toggle button */
+  /** Set when the caller knows the saved row id — enables the type-fix buttons */
   txId?: string | null;
+  /** LINE message id — lets the type-fix buttons re-learn from the slip */
+  messageId?: string | null;
 }
 
 export interface DuplicateSlipData {
@@ -103,16 +105,39 @@ export function createAutoSavedFlex(data: AutoSavedData): messagingApi.FlexMessa
 
   const footer: messagingApi.FlexComponent[] = [];
   if (data.txId) {
+    const msg = data.messageId ? `&msg=${encodeURIComponent(data.messageId)}` : '';
+    // Two explicit fix buttons — wrong direction is corrected in one tap and
+    // the correction teaches the contact memory.
     footer.push({
-      type: 'button',
-      action: {
-        type: 'postback',
-        label: isIncome ? 'สลับเป็นรายจ่าย' : 'สลับเป็นรายรับ',
-        data: `act=toggle_type&tx=${encodeURIComponent(data.txId)}`,
-        displayText: 'สลับประเภทรายการ'
-      },
-      style: 'secondary',
-      height: 'sm'
+      type: 'box',
+      layout: 'horizontal',
+      spacing: 'sm',
+      contents: [
+        {
+          type: 'button',
+          action: {
+            type: 'postback',
+            label: 'รายรับ',
+            data: `act=set_type&tx=${encodeURIComponent(data.txId)}&t=income${msg}`,
+            displayText: 'แก้เป็นรายรับ'
+          },
+          style: isIncome ? 'primary' : 'secondary',
+          color: isIncome ? '#0E9F6E' : undefined,
+          height: 'sm'
+        },
+        {
+          type: 'button',
+          action: {
+            type: 'postback',
+            label: 'รายจ่าย',
+            data: `act=set_type&tx=${encodeURIComponent(data.txId)}&t=expense${msg}`,
+            displayText: 'แก้เป็นรายจ่าย'
+          },
+          style: !isIncome ? 'primary' : 'secondary',
+          color: !isIncome ? '#E5484D' : undefined,
+          height: 'sm'
+        }
+      ] as messagingApi.FlexComponent[]
     });
   }
   if (liffUrl) {

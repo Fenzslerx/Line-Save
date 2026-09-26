@@ -6,6 +6,7 @@ import {
   createManualTransaction,
   updateTransaction,
   deleteTransaction,
+  deleteTransactions,
   getMonthlyBudget,
   setMonthlyBudget,
   saveCategoryRule,
@@ -21,6 +22,7 @@ function makeFakeD1(rows: any[] = [], firstRow: any = null) {
       return {
         bind(...params: any[]) {
           state.params = params;
+          (this as any)._params = params;
           return this;
         },
         async run() {
@@ -103,6 +105,28 @@ describe('LIFF Query Layer', () => {
     const db = makeFakeD1();
     await deleteTransaction(db, 'U1', 'T9');
     expect(db.calls[0].sql).toContain('DELETE FROM transactions WHERE user_id = ? AND id = ?');
+  });
+
+  it('should batch-delete multiple transactions scoped to the owner', async () => {
+    const batch: any[][] = [];
+    const db = makeFakeD1();
+    (db as any).batch = async (stmts: any[]) => {
+      batch.push(stmts.map((s: any) => s._params));
+      return stmts.map(() => ({ meta: { changes: 1 } }));
+    };
+    const deleted = await deleteTransactions(db, 'U1', ['T1', 'T2', 'T3']);
+    expect(deleted).toBe(3);
+    expect(batch[0]).toHaveLength(3);
+    expect(batch[0][0]).toEqual(['U1', 'T1']);
+    expect(batch[0][2]).toEqual(['U1', 'T3']);
+  });
+
+  it('should not issue a batch delete for an empty id list', async () => {
+    const db = makeFakeD1();
+    (db as any).batch = jest.fn();
+    const deleted = await deleteTransactions(db, 'U1', []);
+    expect(deleted).toBe(0);
+    expect((db as any).batch).not.toHaveBeenCalled();
   });
 
   it('should upsert the monthly budget', async () => {

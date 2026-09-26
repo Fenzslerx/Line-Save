@@ -7,6 +7,7 @@ import {
   createManualTransaction,
   updateTransaction,
   deleteTransaction,
+  deleteTransactions,
   getMonthlyBudget,
   setMonthlyBudget,
   saveCategoryRule,
@@ -36,15 +37,14 @@ async function getLiffUser(request: Request): Promise<LiffUser | null> {
   if (cached && cached.expires > Date.now()) return cached.user;
 
   try {
-    const verifyRes = await fetch(
-      `https://api.line.me/oauth2/v2.1/verify?access_token=${encodeURIComponent(token)}`
-    );
-    if (!verifyRes.ok) return null;
+    const [verifyRes, userinfoRes] = await Promise.all([
+      fetch(`https://api.line.me/oauth2/v2.1/verify?access_token=${encodeURIComponent(token)}`),
+      fetch('https://api.line.me/oauth2/v2.1/userinfo', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+    ]);
+    if (!verifyRes.ok || !userinfoRes.ok) return null;
 
-    const userinfoRes = await fetch('https://api.line.me/oauth2/v2.1/userinfo', {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    if (!userinfoRes.ok) return null;
     const profile: any = await userinfoRes.json();
     if (!profile?.sub) return null;
 
@@ -156,6 +156,16 @@ export async function handleLiffApi(request: Request, url: URL): Promise<Respons
       await deleteTransaction(db, user.userId, id);
       audit(db, user.userId, 'delete', 'transaction', id);
       return Response.json({ ok: true });
+    }
+
+    if (method === 'POST' && route === 'transactions/bulk-delete') {
+      const body = await readJson(request);
+      const ids = Array.isArray(body.ids)
+        ? ([...new Set(body.ids.map((v: unknown) => String(v).trim()).filter(Boolean))] as string[]).slice(0, 200)
+        : [];
+      if (!ids.length) return badRequest('ids must be a non-empty array');
+      const deleted = await deleteTransactions(db, user.userId, ids);
+      return Response.json({ ok: true, deleted });
     }
 
     if (method === 'POST' && route === 'budget') {

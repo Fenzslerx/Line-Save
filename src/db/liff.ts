@@ -150,6 +150,15 @@ export async function deleteTransaction(db: D1Database, userId: string, id: stri
     .run();
 }
 
+export async function deleteTransactions(db: D1Database, userId: string, ids: string[]): Promise<number> {
+  if (ids.length === 0) return 0;
+  const statements = ids.map(id =>
+    db.prepare('DELETE FROM transactions WHERE user_id = ? AND id = ?').bind(userId, id)
+  );
+  const results = await db.batch(statements);
+  return results.reduce((sum, r) => sum + (r.meta?.changes || 0), 0);
+}
+
 export async function getMonthlyBudget(db: D1Database, userId: string): Promise<number | null> {
   const row = await db
     .prepare('SELECT monthly_budget FROM budgets WHERE user_id = ?')

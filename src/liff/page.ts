@@ -43,11 +43,11 @@ header img { width:42px; height:42px; border-radius:50%; object-fit:cover; borde
 .monthnav { display:flex; align-items:center; justify-content:space-between; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:5px; margin:2px 0 14px; }
 .monthnav button { background:var(--chip); border:none; border-radius:10px; width:38px; height:34px; font-size:17px; color:var(--ink); cursor:pointer; }
 .monthnav .m-label { font-weight:700; font-size:14px; }
-.tabs { display:flex; position:fixed; bottom:0; left:0; right:0; background:rgba(255,255,255,.92); backdrop-filter:blur(12px); border-top:1px solid var(--line); z-index:30; padding-bottom:env(safe-area-inset-bottom); }
-.tabs button { flex:1; border:none; background:none; padding:9px 0 10px; font-size:11px; color:var(--muted); cursor:pointer; transition:color .15s; }
-.tabs button .ico { display:block; margin-bottom:2px; opacity:.5; transition:opacity .15s; }
+.tabs { display:flex; position:fixed; bottom:0; left:0; right:0; background:#FFFFFF; border-top:1px solid #E3E5E8; box-shadow:0 -2px 12px rgba(16,24,40,.07); z-index:30; padding-bottom:env(safe-area-inset-bottom); }
+.tabs button { flex:1; border:none; background:none; padding:9px 0 10px; font-size:11.5px; color:#5F6570; font-weight:600; cursor:pointer; transition:color .15s; }
+.tabs button .ico { display:block; margin-bottom:2px; opacity:.8; transition:opacity .15s; }
 .tabs button .ico svg { display:block; width:21px; height:21px; margin:0 auto; }
-.tabs button.active { color:var(--ink); font-weight:700; }
+.tabs button.active { color:var(--acc); font-weight:800; }
 .tabs button.active .ico { opacity:1; }
 .page { display:none; animation:fadein .18s ease; }
 .page.active { display:block; }
@@ -122,6 +122,16 @@ h2.sec { font-size:12px; margin:14px 4px 8px; color:var(--muted); font-weight:70
 .badge { display:inline-block; font-size:9.5px; background:var(--acc-soft); color:var(--acc); border-radius:5px; padding:1.5px 6px; margin-left:6px; font-weight:700; vertical-align:1px; }
 .empty { text-align:center; color:var(--muted); padding:26px 0; font-size:13.5px; }
 .chipclear { display:inline-flex; align-items:center; gap:6px; background:var(--ink); color:#fff; font-size:12px; border-radius:20px; padding:6px 12px; margin:0 0 10px; cursor:pointer; border:none; }
+/* multi-delete mode */
+.selrow { display:flex; justify-content:flex-end; margin:0 0 10px; }
+.seltool { border:1.5px solid var(--red); background:var(--red-soft); color:var(--red); font-size:12.5px; font-weight:700; border-radius:20px; padding:7px 14px; cursor:pointer; }
+.seltool.on { background:var(--red); color:#fff; }
+.tx .ck { width:24px; height:24px; border-radius:50%; border:2px solid #C9CDD3; flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:13px; color:#fff; }
+.tx.picked { background:var(--red-soft); border-radius:12px; }
+.tx.picked .ck { background:var(--red); border-color:var(--red); }
+.delbar { position:fixed; left:14px; right:14px; bottom:calc(70px + env(safe-area-inset-bottom)); display:flex; gap:10px; z-index:45; }
+.delbar .btn-danger, .delbar .btn-ghost { width:auto; margin-top:0; box-shadow:0 6px 18px rgba(16,24,40,.18); }
+body.deleting .fab { display:none; }
 /* fab + sheet */
 .fab { position:fixed; right:18px; bottom:86px; width:54px; height:54px; border-radius:18px; background:var(--ink); color:#fff; font-size:26px; border:none; box-shadow:0 8px 22px rgba(16,24,40,.28); cursor:pointer; z-index:40; }
 .overlay { position:fixed; inset:0; background:rgba(16,18,24,.4); display:none; align-items:flex-end; justify-content:center; z-index:50; }
@@ -169,14 +179,13 @@ h2.sec { font-size:12px; margin:14px 4px 8px; color:var(--muted); font-weight:70
   <div id="loadErr" style="display:none;text-align:center;padding:30px 16px;color:var(--muted);font-size:13.5px">โหลดข้อมูลไม่สำเร็จ<br><button class="btn-primary" style="width:auto;padding:10px 26px;margin:14px auto 0" onclick="loadDash()">ลองอีกครั้ง</button></div>
   <div id="content" style="display:none">
 
-  <div class="monthnav">
-    <button onclick="shiftMonth(-1)">‹</button>
-    <span class="m-label" id="monthLabel"></span>
-    <button onclick="shiftMonth(1)">›</button>
-  </div>
-
   <!-- ============ หน้าแรก ============ -->
   <div class="page active" id="page-home">
+    <div class="monthnav">
+      <button onclick="shiftMonth(-1)">‹</button>
+      <span class="m-label"></span>
+      <button onclick="shiftMonth(1)">›</button>
+    </div>
     <div class="card">
       <div class="hero-lbl">คงเหลือเดือนนี้ (รายรับ − รายจ่าย)</div>
       <div class="hero-v" id="net"></div>
@@ -207,6 +216,11 @@ h2.sec { font-size:12px; margin:14px 4px 8px; color:var(--muted); font-weight:70
 
   <!-- ============ รายการ ============ -->
   <div class="page" id="page-tx">
+    <div class="monthnav">
+      <button onclick="shiftMonth(-1)">‹</button>
+      <span class="m-label"></span>
+      <button onclick="shiftMonth(1)">›</button>
+    </div>
     <div class="txbar">
       <input id="searchBox" placeholder="ค้นหาหมวด / ร้านค้า" oninput="onSearch(this.value)">
       <div class="fseg" id="fseg">
@@ -216,6 +230,9 @@ h2.sec { font-size:12px; margin:14px 4px 8px; color:var(--muted); font-weight:70
       </div>
     </div>
     <button class="chipclear" id="dateChip" style="display:none" onclick="clearDateFilter()"></button>
+    <div class="selrow">
+      <button class="seltool" id="delToggle" onclick="toggleDelMode()">ลบหลายรายการ</button>
+    </div>
     <div id="txList"></div>
   </div>
 
@@ -249,6 +266,11 @@ h2.sec { font-size:12px; margin:14px 4px 8px; color:var(--muted); font-weight:70
 </div>
 
 <button class="fab" onclick="openAdd()">+</button>
+
+<div class="delbar" id="delBar" style="display:none">
+  <button class="btn-ghost" style="margin-top:0;flex:1;padding:11px 0" onclick="toggleDelMode()">ยกเลิก</button>
+  <button class="btn-danger" style="margin-top:0;flex:2;padding:11px 0" onclick="bulkDelete()">ลบที่เลือก (<span id="delCount">0</span>)</button>
+</div>
 
 <div class="tabs">
   <button class="active" id="tab-home" onclick="showTab('home')"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg></span>หน้าแรก</button>
@@ -289,7 +311,7 @@ const localDate = d => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2
 const monthTh = m => { const p = m.split('-'); return TH_M[+p[1]-1] + ' ' + (+p[0]+543); };
 const catInitial = c => (c || 'รายการ').trim().charAt(0);
 
-let state = { month: localMonth(new Date()), dash: null, editId: null, type: 'expense', category: 'อื่นๆ', q: '', ft: '', filterDate: '' };
+let state = { month: localMonth(new Date()), dash: null, editId: null, type: 'expense', category: 'อื่นๆ', q: '', ft: '', filterDate: '', delMode: false, sel: [] };
 let accessToken = '';
 
 function toast(msg) {
@@ -320,14 +342,27 @@ async function main() {
   }
   if (!liff.isLoggedIn()) { liff.login(); return; }
   accessToken = liff.getAccessToken();
-  try {
-    const p = await liff.getProfile();
+  // Render cached data instantly, then refresh profile + dashboard in parallel
+  showCached();
+  liff.getProfile().then(p => {
     if (p.pictureUrl) $('avatar').src = p.pictureUrl;
     $('greet').textContent = 'สวัสดี, ' + (p.displayName || 'เพื่อน');
     $('greetSub').textContent = 'วันนี้ออมได้เท่าไหร่แล้ว?';
     api('/api/liff/me', { method: 'POST', body: JSON.stringify({ name: p.displayName }) }).catch(() => {});
-  } catch (e) {}
+  }).catch(() => {});
   await loadDash();
+}
+
+function showCached() {
+  try {
+    const cached = localStorage.getItem('liffDash:' + state.month);
+    if (!cached) return;
+    state.dash = JSON.parse(cached);
+    $('skeleton').style.display = 'none';
+    $('loading').style.display = 'none';
+    $('content').style.display = 'block';
+    render();
+  } catch (e) {}
 }
 
 let loadSeq = 0;
@@ -345,6 +380,7 @@ async function loadDash() {
     const data = await r.json();
     if (seq !== loadSeq) return; // a newer request superseded this one
     state.dash = data;
+    try { localStorage.setItem('liffDash:' + state.month, JSON.stringify(data)); } catch (e) {}
     $('skeleton').style.display = 'none';
     $('loadBar').style.display = 'none';
     $('loading').style.display = 'none';
@@ -356,7 +392,10 @@ async function loadDash() {
     $('skeleton').style.display = 'none';
     $('loadBar').style.display = 'none';
     if (!state.dash) {
-      // First load failed — show a retry screen instead of a blank page.
+      // No live data and no cache — show a retry screen instead of a blank page.
+      showCached();
+    }
+    if (!state.dash) {
       $('content').style.display = 'none';
       $('loadErr').style.display = 'block';
     } else {
@@ -375,7 +414,7 @@ function monthInfo() {
 
 function render() {
   const d = state.dash, mi = monthInfo();
-  $('monthLabel').textContent = monthTh(state.month);
+  document.querySelectorAll('.m-label').forEach(el => el.textContent = monthTh(state.month));
   const net = d.totals.income - d.totals.expense;
   const netEl = $('net');
   netEl.textContent = (net >= 0 ? '+฿' : '−฿') + fmt(Math.abs(net));
@@ -496,11 +535,51 @@ function renderTx() {
 }
 
 function txRow(t) {
-  return '<div class="tx ' + (t.type === 'income' ? 'inc' : 'exp') + '" onclick="openEdit(\\'' + t.id + '\\')">' +
+  const picked = state.delMode && state.sel.indexOf(t.id) > -1;
+  const ck = state.delMode ? '<div class="ck">' + (picked ? '✓' : '') + '</div>' : '';
+  return '<div class="tx ' + (t.type === 'income' ? 'inc' : 'exp') + (picked ? ' picked' : '') + '" onclick="' + (state.delMode ? 'toggleSel(\\'' + t.id + '\\')' : 'openEdit(\\'' + t.id + '\\')') + '">' + ck +
     '<div class="ic">' + esc(catInitial(t.category)) + '</div>' +
     '<div class="mid"><div class="cat">' + esc(t.category) + (t.source !== 'liff' ? '<span class="badge">สลิป</span>' : '') + '</div>' +
     '<div class="sub">' + (t.merchant ? esc(t.merchant) : 'ไม่ระบุร้านค้า') + '</div></div>' +
     '<div class="amt ' + (t.type === 'income' ? 'pos' : 'neg') + '">' + (t.type === 'income' ? '+' : '−') + '฿' + fmt(t.amount) + '</div></div>';
+}
+
+function toggleDelMode() {
+  state.delMode = !state.delMode;
+  state.sel = [];
+  document.body.classList.toggle('deleting', state.delMode);
+  $('delToggle').textContent = state.delMode ? 'ออกจากโหมดลบ' : 'ลบหลายรายการ';
+  $('delToggle').classList.toggle('on', state.delMode);
+  $('delBar').style.display = state.delMode ? 'flex' : 'none';
+  updateDelCount();
+  renderTx();
+}
+function toggleSel(id) {
+  const i = state.sel.indexOf(id);
+  if (i > -1) state.sel.splice(i, 1); else state.sel.push(id);
+  updateDelCount();
+  renderTx();
+}
+function updateDelCount() { $('delCount').textContent = state.sel.length; }
+async function bulkDelete() {
+  if (!state.sel.length) { toast('ยังไม่ได้เลือกรายการ'); return; }
+  if (!confirm('ลบ ' + state.sel.length + ' รายการที่เลือก?')) return;
+  const btn = event && event.target;
+  if (btn) btn.disabled = true;
+  try {
+    await api('/api/liff/transactions/bulk-delete', { method: 'POST', body: JSON.stringify({ ids: state.sel }) });
+    toast('ลบ ' + state.sel.length + ' รายการแล้ว');
+    state.delMode = false; state.sel = [];
+    document.body.classList.remove('deleting');
+    $('delToggle').textContent = 'ลบหลายรายการ';
+    $('delToggle').classList.remove('on');
+    $('delBar').style.display = 'none';
+    await loadDash();
+  } catch (e) {
+    if (String(e && e.message) !== 'unauthorized') toast('ลบไม่สำเร็จ ลองอีกครั้ง');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 function showTab(t) {
@@ -508,12 +587,15 @@ function showTab(t) {
     $('page-' + k).classList.toggle('active', k === t);
     $('tab-' + k).classList.toggle('active', k === t);
   });
+  if (t !== 'tx' && state.delMode) toggleDelMode();
 }
 function shiftMonth(d) {
   const p = state.month.split('-').map(Number);
   const nd = new Date(p[0], p[1] - 1 + d, 1);
   state.month = nd.getFullYear() + '-' + String(nd.getMonth()+1).padStart(2,'0');
-  $('monthLabel').textContent = monthTh(state.month);
+  document.querySelectorAll('.m-label').forEach(el => el.textContent = monthTh(state.month));
+  if (state.delMode) toggleDelMode();
+  showCached();
   loadDash();
 }
 

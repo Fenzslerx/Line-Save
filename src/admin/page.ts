@@ -54,6 +54,14 @@ tr:last-child td { border-bottom:none; }
 #refresh:disabled { color:var(--muted); }
 .empty { color:var(--muted); text-align:center; padding:14px 0; font-size:13px; }
 .err { color:var(--red); text-align:center; padding:20px; font-size:13.5px; }
+.live-dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--acc); margin-right:6px; animation:blink 1.6s infinite; }
+@keyframes blink { 0%,100% { opacity:1 } 50% { opacity:.25 } }
+.out { font-size:10px; font-weight:800; border-radius:5px; padding:2px 7px; color:#fff; white-space:nowrap; }
+.out.ok { background:var(--acc); } .out.fail { background:var(--red); }
+.out.skip { background:#8E959E; } .out.proc { background:var(--amber); }
+.live-ev { font-weight:700; font-size:12.5px; }
+.live-src { font-size:10px; background:var(--chip); border-radius:5px; padding:2px 6px; font-weight:700; white-space:nowrap; }
+.lat { color:var(--muted); font-size:11px; white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -174,6 +182,8 @@ async function load() {
     '</div>';
 
   const html =
+    '<h2><span class="live-dot"></span>Live · กิจกรรมล่าสุด <span class="mut" style="font-size:11px;font-weight:600;text-transform:none;letter-spacing:0" id="liveAt"></span></h2>' +
+    '<div class="card" id="liveCard"><div class="empty">กำลังโหลด…</div></div>' +
     alertBanner +
     '<h2>สถานะระบบ</h2>' +
     '<div class="card">' +
@@ -216,8 +226,102 @@ async function load() {
         ).join('') + '</table>') +
     '</div>';
   $('root').innerHTML = html;
+  loadLive();
 }
-setInterval(load, 30000);
+
+// ================= Live activity feed (polled every 4s) =================
+var EV = {
+  'message.image': 'ส่งรูปสลิป', 'message.text': 'ส่งข้อความ', 'message.sticker': 'ส่งสติกเกอร์',
+  'postback': 'กดปุ่มในแชท', 'follow': 'เพิ่มเพื่อนบอท',
+  'slip_saved': 'บันทึกสลิปแล้ว', 'stage_not_slip': 'ตัดว่าไม่ใช่สลิป',
+  'reply_ok': 'ตอบกลับสำเร็จ', 'reply_fail': 'ตอบกลับไม่สำเร็จ',
+  'internal_transfer': 'โอนข้ามบัญชี (ไม่บันทึก)', 'duplicate_detected': 'พบสลิปซ้ำ — ถามผู้ใช้',
+  'dup_recent_batch_autosaved': 'สลิปชุดเดียวกัน — บันทึกเพิ่ม', 'contact_memory_income': 'จำชื่อคนโอน → รายรับ',
+  'ocr_parser_hit': 'อ่านสลิปด้วยกฎ (ไม่ใช้ AI)', 'ocr_parser_miss': 'กฎอ่านไม่ได้ → ส่งต่อ AI',
+  'gemini_call_ok': 'เรียก AI สำเร็จ', 'gemini_call_fail': 'เรียก AI ไม่สำเร็จ',
+  'gemini_quota_exceeded': 'โควตา AI หมด', 'gemini_cache_hit': 'ใช้ผลเดิมจากแคช',
+  'typhoon_ocr_ok': 'OCR สำเร็จ', 'typhoon_ocr_fail': 'OCR ล้มเหลว', 'typhoon_ocr_stats': 'OCR อ่านข้อความได้',
+  'content_download_ok': 'ดาวน์โหลดรูปจาก LINE', 'content_download_fail': 'ดาวน์โหลดรูปไม่สำเร็จ',
+  'signature_invalid': 'เว็บฮุคลายเซ็นผิด', 'event_processing_error': 'ประมวลผลพลาด',
+  'amount_crosscheck_fix': 'แก้ยอดให้ตรง OCR', 'amount_crosscheck_mismatch': 'ยอดไม่ตรงกับ OCR',
+  'future_date_rejected': 'ตัดวันที่ในอนาคต', 'vision_extraction_failed': 'อ่านสลิปล้มเหลว'
+};
+var STAGE = {
+  'received': 'รับรูปเข้ามา', 'downloading': 'กำลังดาวน์โหลด', 'extracting': 'กำลังอ่าน',
+  'extracted': 'อ่านเสร็จ', 'awaiting_confirm': 'รอยืนยันสลิปซ้ำ', 'saving': 'กำลังบันทึก',
+  'saved': 'บันทึกแล้ว', 'replied': 'ตอบกลับแล้ว', 'not_slip': 'ไม่ใช่สลิป', 'skipped': 'ข้าม'
+};
+function evLabel(e) { return EV[e] || String(e || '').replace(/_/g, ' '); }
+function outBadge(outcome, detail) {
+  if (outcome === 'success') return '<span class="out ok">สำเร็จ</span>';
+  if (outcome === 'failed') return '<span class="out fail">ล้มเหลว</span>';
+  if (outcome === 'processing') return '<span class="out proc">กำลังประมวลผล</span>';
+  var label = detail === 'duplicate' ? 'สลิปซ้ำ' : detail === 'not_slip' ? 'ไม่ใช่สลิป'
+    : detail === 'internal_transfer' ? 'โอนข้ามบัญชี' : 'ข้าม';
+  return '<span class="out skip">' + label + '</span>';
+}
+function who(row) {
+  var u = row.user_hash ? '<span class="tag">' + esc(String(row.user_hash).slice(0, 8)) + '…</span>' : '';
+  var g = row.group_id ? ' <span class="tag">กลุ่ม ' + esc(String(row.group_id).slice(-6)) + '</span>' : '';
+  return u + g;
+}
+function loadLive() {
+  if (!KEY) return;
+  fetch('/api/admin/live', { headers: { 'x-admin-key': KEY } })
+    .then(function (r) {
+      if (r.status === 401) { KEY = ''; store.del('adminKey'); loginScreen(); throw new Error('unauth'); }
+      return r.ok ? r.json() : null;
+    })
+    .then(function (d) {
+      if (!d) return;
+      var rows = [];
+      (d.requests || []).forEach(function (r) {
+        rows.push({
+          ts: r.ts, sort: r.ts,
+          html: '<td class="time">' + fmtT(r.ts) + '</td>' +
+            '<td><span class="live-src">ผู้ใช้</span></td>' +
+            '<td><span class="live-ev">' + evLabel(r.event_type) + '</span> ' + who(r) +
+            (r.detail ? ' <span class="detail">' + esc(r.detail).slice(0, 80) + '</span>' : '') + '</td>' +
+            '<td>' + outBadge(r.outcome, r.detail) + '</td>' +
+            '<td class="lat">' + (r.latency_ms != null ? (r.latency_ms >= 1000 ? (r.latency_ms / 1000).toFixed(1) + 's' : r.latency_ms + 'ms') : '') + '</td>'
+        });
+      });
+      (d.slips || []).forEach(function (s) {
+        rows.push({
+          ts: s.updated_ts, sort: s.updated_ts + 0.5,
+          html: '<td class="time">' + fmtT(s.updated_ts) + '</td>' +
+            '<td><span class="live-src">สลิป</span></td>' +
+            '<td><span class="live-ev">' + esc(STAGE[s.stage] || s.stage) + '</span> <span class="tag">#' + esc(String(s.message_id).slice(-6)) + '</span></td>' +
+            '<td>' + (s.status === 'done' ? '<span class="out ok">จบแล้ว</span>' : s.status === 'failed' ? '<span class="out fail">ล้มเหลว</span>' : '<span class="out proc">พอดี</span>') + '</td>' +
+            '<td class="lat"></td>'
+        });
+      });
+      (d.events || []).forEach(function (e) {
+        rows.push({
+          ts: e.ts, sort: e.ts,
+          html: '<td class="time">' + fmtT(e.ts) + '</td>' +
+            '<td><span class="live-src">' + esc(e.source) + '</span></td>' +
+            '<td><span class="live-ev">' + esc(evLabel(e.event)) + '</span>' +
+            (e.level !== 'info' ? ' <span class="lvl ' + (e.level === 'error' ? 'error' : 'lvl-warn') + '">' + (e.level === 'error' ? 'ERROR' : 'WARN') + '</span>' : '') +
+            (e.detail ? ' <span class="detail">' + esc(e.detail).slice(0, 100) + '</span>' : '') + '</td>' +
+            '<td></td><td class="lat"></td>'
+        });
+      });
+      rows.sort(function (a, b) { return b.sort - a.sort; });
+      var card = $('liveCard');
+      if (card) {
+        card.innerHTML = rows.length === 0
+          ? '<div class="empty">ยังไม่มีกิจกรรมใน 6 ชม. ล่าสุด — ส่งสลิปเข้าบอทดูได้เลย</div>'
+          : '<table><tr><th>เวลา</th><th></th><th>เหตุการณ์</th><th>ผล</th><th></th></tr>' +
+            rows.slice(0, 45).map(function (x) { return '<tr>' + x.html + '</tr>'; }).join('') + '</table>';
+      }
+      var at = $('liveAt');
+      if (at) at.textContent = '· อัปเดต ' + new Date(d.now * 1000).toLocaleTimeString('th-TH');
+    })
+    .catch(function (e) { /* transient poll failure — next tick retries */ });
+}
+setInterval(load, 15000);        // metrics & status
+setInterval(loadLive, 4000);     // live activity feed
 // Support one-tap login links: /admin?key=... — consume the param and strip it from the URL
 (function () {
   try {

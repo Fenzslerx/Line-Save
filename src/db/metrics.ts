@@ -222,6 +222,102 @@ export async function getRecentAudit(db: D1Database, limit = 20): Promise<AuditR
   }));
 }
 
+export interface LiveRequestRow {
+  ts: number;
+  request_id: string;
+  event_type: string;
+  outcome: string;
+  detail: string | null;
+  latency_ms: number | null;
+  user_hash: string | null;
+  group_id: string | null;
+}
+
+export interface LiveEventRow {
+  ts: number;
+  level: string;
+  source: string;
+  event: string;
+  detail: string | null;
+  request_id: string | null;
+}
+
+export interface LiveSlipRow {
+  message_id: string;
+  stage: string;
+  status: string;
+  updated_ts: number;
+}
+
+export interface LiveFeed {
+  now: number;
+  requests: LiveRequestRow[];
+  events: LiveEventRow[];
+  slips: LiveSlipRow[];
+}
+
+/**
+ * Everything that just happened, for the admin live view: who sent what,
+ * how the pipeline handled it, and what the bot replied — all real rows.
+ */
+export async function getLiveFeed(
+  db: D1Database,
+  windowSeconds: number = 6 * 60 * 60
+): Promise<LiveFeed> {
+  const cutoff = cutoffOf(windowSeconds);
+  const [requests, events, slips] = await Promise.all([
+    db
+      .prepare(
+        `SELECT ts, request_id, event_type, outcome, error AS detail, latency_ms, user_hash, group_id
+         FROM request_logs WHERE ts >= ?
+         ORDER BY ts DESC LIMIT 80`
+      )
+      .bind(cutoff)
+      .all(),
+    db
+      .prepare(
+        `SELECT ts, level, source, event, detail, request_id
+         FROM system_events WHERE ts >= ?
+         ORDER BY ts DESC LIMIT 160`
+      )
+      .bind(cutoff)
+      .all(),
+    db
+      .prepare(
+        `SELECT message_id, stage, status, updated_ts FROM pending_slips
+         ORDER BY updated_ts DESC LIMIT 40`
+      )
+      .all()
+  ]);
+  return {
+    now: Math.floor(Date.now() / 1000),
+    requests: (requests.results || []).map(r => ({
+      ts: Number(r.ts),
+      request_id: String(r.request_id ?? ''),
+      event_type: String(r.event_type ?? ''),
+      outcome: String(r.outcome ?? ''),
+      detail: r.detail ?? null,
+      latency_ms: r.latency_ms != null ? Number(r.latency_ms) : null,
+      user_hash: r.user_hash ?? null,
+      group_id: r.group_id ?? null
+    })),
+    events: (events.results || []).map(r => ({
+      ts: Number(r.ts),
+      level: String(r.level ?? 'info'),
+      source: String(r.source ?? ''),
+      event: String(r.event ?? ''),
+      detail: r.detail ?? null,
+      request_id: r.request_id ?? null
+    })),
+    slips: (slips.results || []).map(r => ({
+      message_id: String(r.message_id ?? ''),
+      stage: String(r.stage ?? ''),
+      status: String(r.status ?? ''),
+      updated_ts: Number(r.updated_ts ?? 0)
+    }))
+  };
+}
+
 export interface Alert {
   level: 'critical' | 'warning';
   name: string;

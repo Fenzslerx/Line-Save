@@ -11,7 +11,8 @@ import {
   getSignatureFailures,
   getPendingSlipCount,
   getRecentAudit,
-  getAlerts
+  getAlerts,
+  getLiveFeed
 } from '../db/metrics';
 import { config } from '../config/env';
 
@@ -42,6 +43,13 @@ function extractKey(request: Request, url: URL): string {
 export async function handleAdminApi(request: Request, url: URL): Promise<Response> {
   if (!keyMatches(extractKey(request, url))) {
     return Response.json({ error: 'unauthorized' }, { status: 401 });
+  }
+
+  // Lightweight polling endpoint for the live activity feed
+  const route = url.pathname.replace(/^\/api\/admin\/?/, '').replace(/\/$/, '');
+  if (route === 'live') {
+    const feed = await getLiveFeed(getD1());
+    return Response.json(feed);
   }
 
   const db = getD1();

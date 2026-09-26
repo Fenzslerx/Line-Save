@@ -14,7 +14,7 @@ jest.mock('../src/db/events', () => ({
 }));
 
 jest.mock('../src/db/metrics', () => ({
-  getSlipMetrics: jest.fn().mockResolvedValue({ total: 0, success: 0, failed: 0, ignored: 0, stuck: 0 }),
+  getSlipMetrics: jest.fn().mockResolvedValue({ total: 0, success: 0, failed: 0, ignored: 0, stuck: 0, not_slip: 0, not_slip_1h: 0 }),
   getWebhookLatency: jest.fn().mockResolvedValue({ p50: null, p95: null, samples: 0 }),
   getAiLatency: jest.fn().mockResolvedValue({ p50: null, p95: null, samples: 0 }),
   getOcrStats: jest.fn().mockResolvedValue({ ok: 0, fail: 0, failRate: 0, failRate1h: 0 }),
@@ -24,7 +24,8 @@ jest.mock('../src/db/metrics', () => ({
   getSignatureFailures: jest.fn().mockResolvedValue(0),
   getPendingSlipCount: jest.fn().mockResolvedValue(0),
   getRecentAudit: jest.fn().mockResolvedValue([]),
-  getAlerts: jest.fn().mockResolvedValue([])
+  getAlerts: jest.fn().mockResolvedValue([]),
+  getLiveFeed: jest.fn().mockResolvedValue({ now: 1, requests: [], events: [], slips: [] })
 }));
 
 function makeUrl(key?: string): URL {
@@ -64,5 +65,23 @@ describe('Admin API', () => {
       makeUrl()
     );
     expect(viaHeader.status).toBe(200);
+  });
+
+  it('should serve the live activity feed behind the same key', async () => {
+    const unauth = await handleAdminApi(
+      new Request('https://x.test/api/admin/live'),
+      new URL('https://x.test/api/admin/live')
+    );
+    expect(unauth.status).toBe(401);
+
+    const liveUrl = new URL('https://x.test/api/admin/live');
+    liveUrl.searchParams.set('key', 'secret-admin-key-123');
+    const res = await handleAdminApi(new Request('https://x.test/api/admin/live'), liveUrl);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.now).toBeDefined();
+    expect(Array.isArray(body.requests)).toBe(true);
+    expect(Array.isArray(body.events)).toBe(true);
+    expect(Array.isArray(body.slips)).toBe(true);
   });
 });

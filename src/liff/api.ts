@@ -100,8 +100,9 @@ export async function handleLiffApi(request: Request, url: URL): Promise<Respons
     }
 
     if (method === 'GET' && route === 'dashboard') {
-      const month = /^\d{4}-\d{2}$/.test(url.searchParams.get('month') || '')
-        ? (url.searchParams.get('month') as string)
+      const raw = url.searchParams.get('month') || '';
+      const month = raw === 'all' || /^\d{4}-\d{2}$/.test(raw)
+        ? raw
         : monthShift(new Date(), 0);
 
       const [totals, budget, categories, trend, transactions] = await Promise.all([

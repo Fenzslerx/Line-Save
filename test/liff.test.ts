@@ -58,6 +58,21 @@ describe('LIFF Query Layer', () => {
     expect(res[0]).toEqual({ id: 'T1', type: 'expense', category: 'อาหาร', amount: 120, merchant: '7-11', date: '2026-09-10', source: 'line-bot' });
   });
 
+  it('should support month=all to aggregate every recorded month', async () => {
+    const db = makeFakeD1([{ id: 'T1', type: 'expense', category: 'อาหาร', amount: 120, merchant: null, date: '2026-05-10', source: 'line-bot' }]);
+    const rows = await listTransactionsByMonth(db, 'U1', 'all');
+    const { sql, params } = db.calls[0];
+    expect(sql).not.toContain('substr(date, 1, 7)');
+    expect(params).toEqual(['U1']);
+    expect(rows).toHaveLength(1);
+
+    const db2 = makeFakeD1([], { income: 900, expense: 500 });
+    const totals = await getMonthTotals(db2, 'U1', 'all');
+    expect(db2.calls[0].sql).not.toContain('substr(date, 1, 7)');
+    expect(db2.calls[0].params).toEqual(['U1']);
+    expect(totals).toEqual({ income: 900, expense: 500 });
+  });
+
   it('should compute month totals with CASE per type', async () => {
     const db = makeFakeD1([], { income: 900, expense: 500 });
     const res = await getMonthTotals(db, 'U1', '2026-09');

@@ -42,6 +42,8 @@ header img { width:42px; height:42px; border-radius:50%; object-fit:cover; borde
 .h-sub { color:var(--muted); font-size:12px; margin-top:1px; }
 .monthnav { display:flex; align-items:center; justify-content:space-between; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:5px; margin:2px 0 14px; }
 .monthnav button { background:var(--chip); border:none; border-radius:10px; width:38px; height:34px; font-size:17px; color:var(--ink); cursor:pointer; }
+.monthnav button.allbtn { width:auto; padding:0 12px; font-size:12.5px; font-weight:700; color:var(--muted); }
+.monthnav button.allbtn.on { background:var(--ink); color:#fff; }
 .monthnav .m-label { font-weight:700; font-size:14px; }
 .tabs { display:flex; position:fixed; bottom:0; left:0; right:0; background:#FFFFFF; border-top:1px solid #E3E5E8; box-shadow:0 -2px 12px rgba(16,24,40,.07); z-index:30; padding-bottom:env(safe-area-inset-bottom); }
 .tabs button { flex:1; border:none; background:none; padding:9px 0 10px; font-size:11.5px; color:#5F6570; font-weight:600; cursor:pointer; transition:color .15s; }
@@ -106,10 +108,12 @@ h2.sec { font-size:12px; margin:14px 4px 8px; color:var(--muted); font-weight:70
 .fseg button { border:none; background:none; padding:6px 11px; border-radius:9px; font-size:12.5px; color:var(--muted); cursor:pointer; }
 .fseg button.on { background:var(--ink); color:#fff; font-weight:700; }
 .daygrp { margin-bottom:14px; }
-.dayhdr { display:flex; justify-content:space-between; align-items:baseline; padding:0 2px 7px; }
+.dayhdr { display:flex; justify-content:space-between; align-items:baseline; padding:0 2px 7px; gap:6px; }
 .dayhdr .dt { font-size:12.5px; font-weight:700; }
 .dayhdr .dt span { color:var(--muted); font-weight:400; font-size:11px; margin-left:5px; }
 .dayhdr .ds { font-size:12px; color:var(--muted); }
+.dayall { border:1.5px solid var(--red); background:transparent; color:var(--red); border-radius:9px; padding:3px 9px; font-size:11px; font-weight:700; cursor:pointer; white-space:nowrap; }
+.dayall.on { background:var(--red); color:#fff; }
 .tx { display:flex; align-items:center; gap:12px; padding:11px 4px; border-bottom:1px solid var(--line); cursor:pointer; }
 .tx:last-child { border-bottom:none; }
 .tx:active { background:var(--bg); }
@@ -185,6 +189,7 @@ body.deleting .fab { display:none; }
       <button onclick="shiftMonth(-1)">‹</button>
       <span class="m-label"></span>
       <button onclick="shiftMonth(1)">›</button>
+      <button class="allbtn" onclick="showAll()">ทั้งหมด</button>
     </div>
     <div class="card">
       <div class="hero-lbl">คงเหลือเดือนนี้ (รายรับ − รายจ่าย)</div>
@@ -220,6 +225,7 @@ body.deleting .fab { display:none; }
       <button onclick="shiftMonth(-1)">‹</button>
       <span class="m-label"></span>
       <button onclick="shiftMonth(1)">›</button>
+      <button class="allbtn" onclick="showAll()">ทั้งหมด</button>
     </div>
     <div class="txbar">
       <input id="searchBox" placeholder="ค้นหาหมวด / ร้านค้า" oninput="onSearch(this.value)">
@@ -233,6 +239,7 @@ body.deleting .fab { display:none; }
     <div class="selrow">
       <button class="seltool" id="delToggle" onclick="toggleDelMode()">ลบหลายรายการ</button>
     </div>
+    <div class="hint" id="delHint" style="display:none;margin:-4px 2px 8px">แตะ "เลือกทั้งวัน" ที่หัวกลุ่ม หรือค้นหาแล้วแตะรายการ — จบด้วยปุ่มลบด้านล่าง</div>
     <div id="txList"></div>
   </div>
 
@@ -308,7 +315,7 @@ const $ = id => document.getElementById(id);
 const fmt = n => Number(n||0).toLocaleString('th-TH', {maximumFractionDigits:2});
 const localMonth = d => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
 const localDate = d => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
-const monthTh = m => { const p = m.split('-'); return TH_M[+p[1]-1] + ' ' + (+p[0]+543); };
+const monthTh = m => m === 'all' ? 'ทั้งหมด' : (() => { const p = m.split('-'); return TH_M[+p[1]-1] + ' ' + (+p[0]+543); })();
 const catInitial = c => (c || 'รายการ').trim().charAt(0);
 
 let state = { month: localMonth(new Date()), dash: null, editId: null, type: 'expense', category: 'อื่นๆ', q: '', ft: '', filterDate: '', delMode: false, sel: [] };
@@ -405,16 +412,20 @@ async function loadDash() {
 }
 
 function monthInfo() {
+  if (state.month === 'all') {
+    return { isAll: true, y: 0, m: 0, dim: 0, isCur: false, today: 0, elapsed: 0, left: 0 };
+  }
   const now = new Date();
   const p = state.month.split('-').map(Number);
   const dim = new Date(p[0], p[1], 0).getDate();
   const isCur = state.month === localMonth(now);
-  return { y: p[0], m: p[1], dim, isCur, today: now.getDate(), elapsed: isCur ? now.getDate() : dim, left: isCur ? Math.max(1, dim - now.getDate() + 1) : 0 };
+  return { isAll: false, y: p[0], m: p[1], dim, isCur, today: now.getDate(), elapsed: isCur ? now.getDate() : dim, left: isCur ? Math.max(1, dim - now.getDate() + 1) : 0 };
 }
 
 function render() {
   const d = state.dash, mi = monthInfo();
   document.querySelectorAll('.m-label').forEach(el => el.textContent = monthTh(state.month));
+  document.querySelectorAll('.allbtn').forEach(b => b.classList.toggle('on', state.month === 'all'));
   const net = d.totals.income - d.totals.expense;
   const netEl = $('net');
   netEl.textContent = (net >= 0 ? '+฿' : '−฿') + fmt(Math.abs(net));
@@ -424,7 +435,7 @@ function render() {
 
   /* budget */
   const bc = $('budgetCard');
-  if (d.budget && d.budget > 0) {
+  if (!mi.isAll && d.budget && d.budget > 0) {
     bc.style.display = 'block';
     const pct = Math.min(100, d.totals.expense / d.budget * 100);
     $('budgetAmt').textContent = '฿' + fmt(d.totals.expense) + ' / ฿' + fmt(d.budget);
@@ -443,16 +454,27 @@ function render() {
   const saveRate = d.totals.income > 0 ? Math.round((d.totals.income - d.totals.expense) / d.totals.income * 100) : null;
   const expCats = d.categories.filter(c => c.type === 'expense');
   const top = expCats[0];
-  let html =
-    '<div class="ins"><div class="lbl">เฉลี่ยต่อวัน</div><div class="v">฿' + fmt(avgDay) + '</div><div class="d">' + (mi.isCur ? 'คิดจาก ' + mi.elapsed + ' วันที่ผ่านมา' : 'ทั้งเดือน') + '</div></div>' +
-    '<div class="ins"><div class="lbl">' + (mi.isCur ? 'คาดการณ์สิ้นเดือน' : 'อัตราการออม') + '</div><div class="v">' +
-    (mi.isCur ? '฿' + fmt(avgDay * mi.dim) : (saveRate === null ? '—' : saveRate + '%')) + '</div><div class="d">' +
-    (mi.isCur ? 'ถ้าใช้ต่อแบบนี้' : (saveRate === null ? 'ยังไม่มีรายรับเดือนนี้' : (saveRate >= 0 ? 'ออมได้ ' + saveRate + '%' : 'ใช้เกินรายรับ'))) + '</div></div>';
-  if (top) html += '<div class="ins" style="grid-column:1 / -1"><div class="lbl">ใช้มากที่สุด</div><div class="v">' + esc(top.category) + ' · ฿' + fmt(top.total) + '</div><div class="d">' + Math.round(top.total / (d.totals.expense||1) * 100) + '% ของรายจ่ายทั้งหมด</div></div>';
+  let html;
+  if (mi.isAll) {
+    // All-time view: skip daily-average / forecast cards, show savings rate only
+    html = '<div class="ins" style="grid-column:1 / -1"><div class="lbl">อัตราการออม (รวมทุกเดือน)</div><div class="v">' +
+      (saveRate === null ? '—' : saveRate + '%') + '</div><div class="d">' +
+      (saveRate === null ? 'ยังไม่มีรายรับ' : (saveRate >= 0 ? 'ออมได้ ' + saveRate + '%' : 'ใช้เกินรายรับ')) + '</div></div>';
+    if (top) html += '<div class="ins" style="grid-column:1 / -1"><div class="lbl">ใช้มากที่สุด</div><div class="v">' + esc(top.category) + ' · ฿' + fmt(top.total) + '</div><div class="d">' + Math.round(top.total / (d.totals.expense||1) * 100) + '% ของรายจ่ายทั้งหมด</div></div>';
+  } else {
+    html =
+      '<div class="ins"><div class="lbl">เฉลี่ยต่อวัน</div><div class="v">฿' + fmt(avgDay) + '</div><div class="d">' + (mi.isCur ? 'คิดจาก ' + mi.elapsed + ' วันที่ผ่านมา' : 'ทั้งเดือน') + '</div></div>' +
+      '<div class="ins"><div class="lbl">' + (mi.isCur ? 'คาดการณ์สิ้นเดือน' : 'อัตราการออม') + '</div><div class="v">' +
+      (mi.isCur ? '฿' + fmt(avgDay * mi.dim) : (saveRate === null ? '—' : saveRate + '%')) + '</div><div class="d">' +
+      (mi.isCur ? 'ถ้าใช้ต่อแบบนี้' : (saveRate === null ? 'ยังไม่มีรายรับเดือนนี้' : (saveRate >= 0 ? 'ออมได้ ' + saveRate + '%' : 'ใช้เกินรายรับ'))) + '</div></div>';
+    if (top) html += '<div class="ins" style="grid-column:1 / -1"><div class="lbl">ใช้มากที่สุด</div><div class="v">' + esc(top.category) + ' · ฿' + fmt(top.total) + '</div><div class="d">' + Math.round(top.total / (d.totals.expense||1) * 100) + '% ของรายจ่ายทั้งหมด</div></div>';
+  }
   $('insights').innerHTML = html;
-
-  /* calendar heatmap */
-  renderCal(mi);
+  // Calendar only makes sense for a single month
+  $('insights').style.display = 'grid';
+  if (mi.isAll) $('cal').innerHTML = '';
+  else renderCal(mi);
+  document.querySelectorAll('h2.sec').forEach(h => { if (h.textContent.indexOf('ปฏิทิน') > -1) h.style.display = mi.isAll ? 'none' : 'block'; });
 
   /* trend chart */
   const maxV = Math.max(1, ...d.trend.map(t => Math.max(t.income, t.expense)));
@@ -528,10 +550,31 @@ function renderTx() {
     const rows = groups[date];
     const dayTot = rows.reduce((s, t) => s + (t.type === 'expense' ? t.amount : 0), 0);
     const dt = new Date(date + 'T00:00:00');
+    const dayPicked = state.delMode && rows.every(t => state.sel.indexOf(t.id) > -1) && rows.length > 0;
     return '<div class="daygrp card"><div class="dayhdr"><div class="dt">' + dt.getDate() + ' ' + TH_M[dt.getMonth()] + ' ' + (dt.getFullYear()+543) + '<span>วัน' + ['', 'จันทร์','อังคาร','พุธ','พฤหัสบดี','ศุกร์','เสาร์','อาทิตย์'][dt.getDay()] + '</span></div>' +
-      (dayTot > 0 ? '<div class="ds">จ่าย ฿' + fmt(dayTot) + '</div>' : '') + '</div>' +
+      (dayTot > 0 ? '<div class="ds">จ่าย ฿' + fmt(dayTot) + '</div>' : '') +
+      (state.delMode ? '<button class="dayall' + (dayPicked ? ' on' : '') + '" onclick="toggleDaySel(\\'' + date + '\\')">' + (dayPicked ? '✓ เลือกแล้ว' : 'เลือกทั้งวัน') + '</button>' : '') +
+      '</div>' +
       rows.map(txRow).join('') + '</div>';
   }).join('');
+}
+
+/** Select/deselect every visible transaction of one day — fast cleanup for old slips. */
+function toggleDaySel(date) {
+  const ids = state.dash.transactions
+    .filter(t => t.date === date &&
+      (!state.ft || t.type === state.ft) &&
+      (!state.filterDate || t.date === state.filterDate) &&
+      (!state.q || (t.category + ' ' + (t.merchant || '')).indexOf(state.q) > -1))
+    .map(t => t.id);
+  const allSel = ids.length > 0 && ids.every(id => state.sel.indexOf(id) > -1);
+  ids.forEach(id => {
+    const i = state.sel.indexOf(id);
+    if (allSel) { if (i > -1) state.sel.splice(i, 1); }
+    else if (i < 0) state.sel.push(id);
+  });
+  updateDelCount();
+  renderTx();
 }
 
 function txRow(t) {
@@ -551,6 +594,7 @@ function toggleDelMode() {
   $('delToggle').textContent = state.delMode ? 'ออกจากโหมดลบ' : 'ลบหลายรายการ';
   $('delToggle').classList.toggle('on', state.delMode);
   $('delBar').style.display = state.delMode ? 'flex' : 'none';
+  $('delHint').style.display = state.delMode ? 'block' : 'none';
   updateDelCount();
   renderTx();
 }
@@ -590,10 +634,25 @@ function showTab(t) {
   if (t !== 'tx' && state.delMode) toggleDelMode();
 }
 function shiftMonth(d) {
-  const p = state.month.split('-').map(Number);
-  const nd = new Date(p[0], p[1] - 1 + d, 1);
-  state.month = nd.getFullYear() + '-' + String(nd.getMonth()+1).padStart(2,'0');
+  if (state.month === 'all') {
+    // Leaving the all-time view — start from the current month
+    state.month = localMonth(new Date());
+  } else {
+    const p = state.month.split('-').map(Number);
+    const nd = new Date(p[0], p[1] - 1 + d, 1);
+    state.month = nd.getFullYear() + '-' + String(nd.getMonth()+1).padStart(2,'0');
+  }
   document.querySelectorAll('.m-label').forEach(el => el.textContent = monthTh(state.month));
+  document.querySelectorAll('.allbtn').forEach(b => b.classList.toggle('on', state.month === 'all'));
+  if (state.delMode) toggleDelMode();
+  showCached();
+  loadDash();
+}
+function showAll() {
+  if (state.month === 'all') return;
+  state.month = 'all';
+  document.querySelectorAll('.m-label').forEach(el => el.textContent = 'ทั้งหมด');
+  document.querySelectorAll('.allbtn').forEach(b => b.classList.add('on'));
   if (state.delMode) toggleDelMode();
   showCached();
   loadDash();
@@ -748,6 +807,7 @@ async function saveRule() {
   }
 }
 async function exportCsv() {
+  if (state.month === 'all') { toast('เลือกเดือนก่อนส่งออกนะ'); return; }
   const btn = event && event.target;
   if (btn) btn.disabled = true;
   try {

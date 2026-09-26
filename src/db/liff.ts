@@ -18,22 +18,32 @@ export interface MonthTotals {
 /**
  * LIFF-scoped queries. Unlike the bot's personal summary, these include the
  * user's group transactions too — the dashboard reflects everything the user
- * recorded themselves.
+ * recorded themselves. month = 'all' aggregates every recorded month.
  */
+
+const ALL_MONTHS = 'all';
+
+function monthFilter(month: string): { where: string; params: unknown[] } {
+  return month === ALL_MONTHS
+    ? { where: '', params: [] }
+    : { where: 'AND substr(date, 1, 7) = ?', params: [month] };
+}
 
 export async function listTransactionsByMonth(
   db: D1Database,
   userId: string,
-  month: string // YYYY-MM
+  month: string // YYYY-MM or 'all'
 ): Promise<LiffTransaction[]> {
+  const f = monthFilter(month);
   const { results } = await db
     .prepare(
       `SELECT id, type, category, amount, merchant, date, source
        FROM transactions
-       WHERE user_id = ? AND substr(date, 1, 7) = ?
-       ORDER BY date DESC, created_at DESC`
+       WHERE user_id = ? ${f.where}
+       ORDER BY date DESC, created_at DESC
+       LIMIT 500`
     )
-    .bind(userId, month)
+    .bind(userId, ...f.params)
     .all();
   return (results || []).map(mapTransaction);
 }
@@ -43,14 +53,15 @@ export async function getMonthTotals(
   userId: string,
   month: string
 ): Promise<MonthTotals> {
+  const f = monthFilter(month);
   const row = await db
     .prepare(
       `SELECT COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) AS income,
               COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS expense
        FROM transactions
-       WHERE user_id = ? AND substr(date, 1, 7) = ?`
+       WHERE user_id = ? ${f.where}`
     )
-    .bind(userId, month)
+    .bind(userId, ...f.params)
     .first();
   return { income: Number(row?.income ?? 0), expense: Number(row?.expense ?? 0) };
 }
@@ -60,15 +71,16 @@ export async function getCategoryTotalsByMonth(
   userId: string,
   month: string
 ): Promise<{ category: string; type: 'income' | 'expense'; total: number }[]> {
+  const f = monthFilter(month);
   const { results } = await db
     .prepare(
       `SELECT category, type, SUM(amount) AS total
        FROM transactions
-       WHERE user_id = ? AND substr(date, 1, 7) = ?
+       WHERE user_id = ? ${f.where}
        GROUP BY category, type
        ORDER BY total DESC`
     )
-    .bind(userId, month)
+    .bind(userId, ...f.params)
     .all();
   return (results || []).map(row => ({
     category: String(row.category),

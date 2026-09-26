@@ -58,11 +58,11 @@ export function createAutoSavedFlex(data: AutoSavedData): messagingApi.FlexMessa
     type: 'box',
     layout: 'horizontal',
     contents: [
-      { type: 'text', text: label, size: 'sm', color: '#9AA0A8', flex: 3 },
+      { type: 'text', text: label, size: 'xs', color: '#9AA0A8', flex: 3 },
       {
         type: 'text',
         text: value,
-        size: 'sm',
+        size: 'xs',
         color: '#16181D',
         weight: 'bold',
         align: 'end',
@@ -73,9 +73,9 @@ export function createAutoSavedFlex(data: AutoSavedData): messagingApi.FlexMessa
   });
 
   const bodyContents: messagingApi.FlexComponent[] = [
-    { type: 'text', text: isIncome ? 'ยอดรับสุทธิ' : 'ยอดชำระสุทธิ', size: 'xs', color: '#9AA0A8' },
-    { type: 'text', text: amountText, size: 'xxl', weight: 'bold', color: accent, margin: 'xs' },
-    { type: 'separator', margin: 'lg', color: '#E8EAED' },
+    { type: 'text', text: isIncome ? 'ยอดรับสุทธิ' : 'ยอดชำระสุทธิ', size: 'xxs', color: '#9AA0A8' },
+    { type: 'text', text: amountText, size: 'xl', weight: 'bold', color: accent, margin: 'none' },
+    { type: 'separator', margin: 'md', color: '#E8EAED' },
     row('หมวดหมู่', data.category),
     row('ร้านค้า/ผู้รับ', data.merchant || 'ไม่ระบุ'),
     row('วันที่ทำรายการ', data.date)
@@ -83,11 +83,11 @@ export function createAutoSavedFlex(data: AutoSavedData): messagingApi.FlexMessa
   if (data.txId) {
     bodyContents.push(row('รหัสอ้างอิง', '#' + data.txId.replace(/-/g, '').slice(0, 8).toUpperCase()));
   }
-  bodyContents.push({ type: 'separator', margin: 'lg', color: '#E8EAED' });
+  bodyContents.push({ type: 'separator', margin: 'md', color: '#E8EAED' });
   bodyContents.push({
     type: 'text',
-    text: 'รายการนี้ถูกบันทึกลงสมุดบัญชี LineSave เรียบร้อยแล้ว',
-    size: 'xs',
+    text: 'รายการนี้ถูกบันทึกลงสมุดบัญชีเรียบร้อยแล้ว',
+    size: 'xxs',
     color: '#9AA0A8',
     wrap: true
   });
@@ -127,20 +127,20 @@ export function createAutoSavedFlex(data: AutoSavedData): messagingApi.FlexMessa
         layout: 'horizontal',
         // Soft tinted band at the top of the receipt — green for income, red for expense
         backgroundColor: soft,
-        paddingAll: '20px',
-        paddingBottom: '12px',
+        paddingAll: '16px',
+        paddingBottom: '10px',
         contents: [
           { type: 'text', text: 'LineSave', size: 'sm', weight: 'bold', color: accent, flex: 0 },
           { type: 'filler', flex: 1 },
-          { type: 'text', text: statusText, size: 'xs', weight: 'bold', color: accent, flex: 0 }
+          { type: 'text', text: statusText, size: 'xxs', weight: 'bold', color: accent, flex: 0 }
         ]
       },
       body: {
         type: 'box',
         layout: 'vertical',
-        spacing: 'sm',
-        paddingAll: '20px',
-        paddingTop: '12px',
+        spacing: 'xs',
+        paddingAll: '16px',
+        paddingTop: '10px',
         contents: bodyContents
       },
       footer: footer.length

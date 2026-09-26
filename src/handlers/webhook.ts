@@ -339,26 +339,12 @@ async function handleImageMessage(
 
   await markStage('extracted');
   console.log('[Slip Detection] Vision Result:', extraction);
-  // If not a slip, stay silent in groups (avoid noise). In a 1-on-1 chat the
-  // user is talking to us directly — tell them instead of leaving them hanging.
+  // If not a slip, stay completely silent (especially in groups)
   if (!extraction.is_slip || extraction.amount === null) {
     await setSlipStage(db, messageId, 'not_slip', 'done', userId);
     logStage(db, requestId, 'not_slip', { confidence: extraction.confidence });
     await finishRequest(db, requestId, 'ignored', Date.now() - requestStart, 'not_slip');
-    console.log('[Slip Detection] Image is not a recognized slip.');
-    if (!groupId) {
-      try {
-        await replyLineMessage(replyToken, [
-          {
-            type: 'text',
-            text: 'อ่านรูปที่ส่งมาแล้วยังไม่เจอรายการโอน/ชำระเงินครับ 🤔\nลองถ่ายสลิปให้เห็นตัวเลขและชื่อธนาคารชัด ๆ แล้วส่งใหม่นะครับ'
-          }
-        ]);
-      } catch (err: any) {
-        await finishRequest(db, requestId, 'failed', Date.now() - requestStart, `reply_failed: ${err?.message || err}`);
-        throw err;
-      }
-    }
+    console.log('[Slip Detection] Image is not a recognized slip. Staying silent.');
     return;
   }
 

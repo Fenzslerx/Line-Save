@@ -193,7 +193,12 @@ export async function extractSlipInfo(
     const t0 = Date.now();
     try {
       ocrText = await ocrImage(imageBuffer, mimeType);
-      tryLog('info', 'typhoon_ocr_ok', `latency=${Date.now() - t0}ms chars=${ocrText.length}`);
+      // Privacy-safe stats: Thai character ratio and how many slip keywords the
+      // text contains — enough to spot mojibake / wrong-image OCR without
+      // logging slip contents.
+      const thaiChars = (ocrText.match(/[\u0E00-\u0E7F]/g) || []).length;
+      const hintCount = (ocrText.match(new RegExp(SLIP_HINT_RE.source, 'gi')) || []).length;
+      tryLog('info', 'typhoon_ocr_stats', `latency=${Date.now() - t0}ms chars=${ocrText.length} thai=${(thaiChars / ocrText.length).toFixed(2)} hints=${hintCount}`);
     } catch (err: any) {
       // Non-fatal: fall back to Gemini reading the image directly
       tryLog('warn', 'typhoon_ocr_fail', String(err?.message || err));
@@ -265,11 +270,12 @@ export async function extractSlipInfo(
 
       postValidate(result, ocrText);
 
-      // Safety net: the text-only pass occasionally misjudges a real slip as
-      // "not a slip" (seen in production — the same image was later saved from
-      // a re-send). If the OCR text clearly looks transactional, retry once
-      // with the actual image attached. Does not consume an error retry.
-      if (!result.is_slip && ocrText && !usedImageFallback && SLIP_HINT_RE.test(ocrText)) {
+      // Safety net: the text-only pass sometimes misjudges a real slip as
+      // "not a slip" (e.g. OCR wording the hint regex misses). Whenever the
+      // text pass says no, retry once with the actual image attached — the
+      // model reading the photo directly is far more reliable. Does not
+      // consume an error retry.
+      if (!result.is_slip && ocrText && !usedImageFallback) {
         usedImageFallback = true;
         parts = imageParts;
         tryLog('warn', 'not_slip_disagrees_with_ocr', 'retrying with image attached');

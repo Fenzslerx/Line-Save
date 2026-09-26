@@ -232,7 +232,7 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
     expect(flexJson).toContain('รายรับทั่วไป');
   });
 
-  it('should stay completely silent for a non-slip image', async () => {
+  it('should tell the user in a personal chat when the image is not a slip', async () => {
     (extractSlipInfo as jest.Mock).mockResolvedValueOnce({
       is_slip: false, amount: null, date: null, merchant: null,
       direction: null, category: null, confidence: 'low'
@@ -245,7 +245,11 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
 
     expect(res.status).toBe(200);
     await new Promise(resolve => setTimeout(resolve, 150));
-    expect((replyLineMessage as jest.Mock).mock.calls.length).toBe(repliesBefore);
+    // No flex card, just a short text nudge — never leave the user hanging
+    expect((replyLineMessage as jest.Mock).mock.calls.length).toBe(repliesBefore + 1);
+    const reply = (replyLineMessage as jest.Mock).mock.calls[repliesBefore][1][0];
+    expect(reply.type).toBe('text');
+    expect(reply.text).toContain('สลิป');
   });
 
   it('should ignore unrecognized postback events', async () => {

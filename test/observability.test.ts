@@ -27,7 +27,9 @@ function makeFakeD1(rows: any[] = []) {
         },
         async first() {
           calls.push({ sql: state.sql, params: state.params });
-          return rows[0] ?? null;
+          // getSlipMetrics issues two first() queries: outcomes, then not-slip counts
+          const idx = /not_slip_1h/.test(state.sql) ? 1 : 0;
+          return rows[idx] ?? null;
         }
       };
     }

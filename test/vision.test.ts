@@ -217,7 +217,7 @@ describe('Vision LLM Slip Extraction Service (Gemini)', () => {
     // ...as TEXT ONLY — no image part is attached when OCR succeeded
     expect(contents[0].parts).toHaveLength(1);
     const promptText = contents[0].parts[0].text;
-    expect(promptText).toContain('OCR text extracted from the image');
+    expect(promptText).toContain('OCR text below was extracted from a photo');
     expect(promptText).toContain('โอนเงิน 350.50');
     expect(contents[0].parts[0].inlineData).toBeUndefined();
     // Deterministic extraction settings
@@ -337,6 +337,41 @@ describe('Vision LLM Slip Extraction Service (Gemini)', () => {
     const promptText = promptSpy.mock.calls[0][0].contents[0].parts[1].text;
     expect(promptText).not.toContain('OCR text extracted');
     warnSpy.mockRestore();
+    config.typhoon.apiKey = '';
+    delete (global as any).fetch;
+  });
+
+  it('should retry with the image attached when the text-only pass misses an obvious slip', async () => {
+    config.typhoon.apiKey = 'test_typhoon_key';
+    global.fetch = jest.fn().mockResolvedValue(new Response(
+      JSON.stringify({ choices: [{ message: { content: 'KBank โอนเงินสำเร็จ จำนวนเงิน 350.50 บาท 23/09/2568' } }] }),
+      { status: 200 }
+    )) as any;
+
+    const notSlip = {
+      text: JSON.stringify({
+        is_slip: false, amount: null, date: null, merchant: null,
+        direction: null, category: null, confidence: 'low'
+      })
+    };
+    const slip = {
+      text: JSON.stringify({
+        is_slip: true, amount: 350.5, date: '2026-09-23', merchant: 'KBank',
+        direction: 'expense', category: 'อื่นๆ', confidence: 'high'
+      })
+    };
+    const promptSpy = jest.fn().mockResolvedValueOnce(notSlip).mockResolvedValueOnce(slip);
+    const mockGemini = { models: { generateContent: promptSpy } } as any;
+
+    const result = await extractSlipInfo(dummyBuffer, 'image/jpeg', mockGemini);
+
+    expect(result.is_slip).toBe(true);
+    expect(result.amount).toBe(350.5);
+    expect(promptSpy).toHaveBeenCalledTimes(2);
+    // First call: text-only. Second call: image attached as the fallback.
+    expect(promptSpy.mock.calls[0][0].contents[0].parts).toHaveLength(1);
+    expect(promptSpy.mock.calls[1][0].contents[0].parts[0].inlineData).toBeDefined();
+
     config.typhoon.apiKey = '';
     delete (global as any).fetch;
   });

@@ -158,6 +158,14 @@ function postValidate(result: SlipExtractionResult, ocrText: string | null): voi
 }
 
 /**
+ * OCR text that smells like a Thai payment slip. Used as a safety net: when
+ * Gemini rules the text-only pass "not a slip" but the text looks like one,
+ * we retry once with the actual image attached.
+ */
+const SLIP_HINT_RE =
+  /(โอน|พร้อมเพย์|promptpay|เงินเข้า|รับเงิน|ชำระเงิน|ชำระบิล|จ่ายเงิน|จำนวนเงิน|ยอดรวม|รวมทั้งสิ้น|เงินออก|เงินสด|ธนาคาร|kbank|scb|ktb|bbl|bay|ttb|truewallet|prompt pay|transfer|payment)/i;
+
+/**
  * Extracts payment details from an image buffer using Google Gemini Vision
  */
 export async function extractSlipInfo(
@@ -193,23 +201,25 @@ export async function extractSlipInfo(
   }
 
   // When OCR succeeded we structure TEXT ONLY — no image upload, several
-  // seconds faster per slip. The image goes to Gemini only when OCR failed.
+  // seconds faster per slip. The image goes to Gemini only when OCR failed
+  // or when the text-only pass misses an obvious slip (retry below).
   const userPrompt = ocrText
-    ? `Analyze this payment slip using ONLY the OCR text extracted from the image (the image itself is not attached):\n"""\n${ocrText}\n"""\nIf the text clearly does not come from a payment slip or receipt, set is_slip=false. Output the transaction details as JSON.`
+    ? `The OCR text below was extracted from a photo the user just sent. Analyze whether that photo is a payment slip, transfer confirmation, or purchase receipt, using the OCR text as the evidence:\n"""\n${ocrText}\n"""\nJudge ONLY from what the text says — do NOT answer is_slip=false merely because no image is attached to this message. If the text contains transaction details (amounts, transfer/payment wording, dates, bank or merchant names), it IS a slip or receipt. Output the transaction details as JSON.`
     : 'Analyze this image and output the transaction details as JSON.';
 
-  const parts: any[] = ocrText
-    ? [{ text: userPrompt }]
-    : [
-        { inlineData: { mimeType: mimeType, data: imageBuffer.toString('base64') } },
-        { text: userPrompt }
-      ];
+  const textParts = [{ text: userPrompt }];
+  const imageParts = [
+    { inlineData: { mimeType: mimeType, data: imageBuffer.toString('base64') } },
+    { text: 'Analyze this image and output the transaction details as JSON.' }
+  ];
+  let parts: any[] = ocrText ? textParts : imageParts;
 
   const MAX_RETRIES = 3;
   let lastError: any;
   // thinkingBudget 0 disables thinking — much faster for straight extraction.
   // Negative values mean "leave the model default" and skip the config entirely.
   let applyThinking = config.gemini.thinkingBudget >= 0;
+  let usedImageFallback = false;
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
@@ -254,6 +264,19 @@ export async function extractSlipInfo(
       };
 
       postValidate(result, ocrText);
+
+      // Safety net: the text-only pass occasionally misjudges a real slip as
+      // "not a slip" (seen in production — the same image was later saved from
+      // a re-send). If the OCR text clearly looks transactional, retry once
+      // with the actual image attached. Does not consume an error retry.
+      if (!result.is_slip && ocrText && !usedImageFallback && SLIP_HINT_RE.test(ocrText)) {
+        usedImageFallback = true;
+        parts = imageParts;
+        tryLog('warn', 'not_slip_disagrees_with_ocr', 'retrying with image attached');
+        attempt--;
+        continue;
+      }
+
       return result;
     } catch (error: any) {
       lastError = error;

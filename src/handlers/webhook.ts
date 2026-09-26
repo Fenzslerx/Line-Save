@@ -174,14 +174,14 @@ export async function processWebhookEvent(event: any): Promise<void> {
     // 2. Handle Postback — kept as a no-op: the bot now auto-saves slips, so no
     // interactive postback cards are sent anymore (legacy clients may still send events).
     else if (event.type === 'postback') {
-      finishRequest(db, requestId, 'ignored', Date.now() - t0);
+      await finishRequest(db, requestId, 'ignored', Date.now() - t0);
       return;
     }
 
-    finishRequest(db, requestId, 'success', Date.now() - t0);
+    await finishRequest(db, requestId, 'success', Date.now() - t0);
     cleanupOldSlipTracking(db);
   } catch (err: any) {
-    finishRequest(db, requestId, 'failed', Date.now() - t0, err?.message || String(err));
+    await finishRequest(db, requestId, 'failed', Date.now() - t0, err?.message || String(err));
     throw err;
   }
 }
@@ -201,7 +201,9 @@ async function handleImageMessage(
   const messageId = event.message.id;
   const replyToken = event.replyToken;
 
-  const markStage = (stage: 'received' | 'downloading' | 'extracting' | 'extracted' | 'saving' | 'saved' | 'replied' | 'not_slip') =>
+  // Awaited so a checkpoint is never dropped by the Workers runtime after the
+  // handler settles — a lost write would leave the slip stuck 'pending'.
+  const markStage = async (stage: 'received' | 'downloading' | 'extracting' | 'extracted' | 'saving' | 'saved' | 'replied' | 'not_slip') =>
     setSlipStage(db, messageId, stage, 'pending', userId);
 
   // Multiple slips sent in a burst each arrive as their own event and are
@@ -218,22 +220,22 @@ async function handleImageMessage(
     const seen = await getCachedExtraction(db, `msg:${messageId}`).catch(() => null);
     if (seen) {
       console.log(`[Slip Detection] Message ${messageId} already processed. Skipping duplicate.`);
-      finishRequest(db, requestId, 'ignored', Date.now() - requestStart, 'duplicate');
+      await finishRequest(db, requestId, 'ignored', Date.now() - requestStart, 'duplicate');
       return;
     }
   }
 
-  markStage('received');
+  await markStage('received');
   const targetChatId = groupId || userId;
   if (targetChatId) {
     await showLoadingAnimation(targetChatId, 20); // max 20 seconds loading animation
   }
 
   console.log(`[Slip Detection] [${requestId}] Downloading image for message: ${messageId}`);
-  markStage('downloading');
+  await markStage('downloading');
   const imageBuffer = await downloadMessageImage(messageId);
 
-  markStage('extracting');
+  await markStage('extracting');
   // Identical slip images resolve instantly from cache instead of calling the LLM again
   const imageHash = `img:${crypto.createHash('sha256').update(imageBuffer).digest('hex')}`;
   let extraction = db ? await getCachedExtraction(db, imageHash).catch(() => null) : null;
@@ -273,13 +275,13 @@ async function handleImageMessage(
     await saveExtractionCache(db, `msg:${messageId}`, extraction).catch(() => {});
   }
 
-  markStage('extracted');
+  await markStage('extracted');
   console.log('[Slip Detection] Vision Result:', extraction);
   // If not a slip, stay completely silent (especially in groups)
   if (!extraction.is_slip || extraction.amount === null) {
-    setSlipStage(db, messageId, 'not_slip', 'done', userId);
+    await setSlipStage(db, messageId, 'not_slip', 'done', userId);
     logStage(db, requestId, 'not_slip', { confidence: extraction.confidence });
-    finishRequest(db, requestId, 'ignored', Date.now() - requestStart, 'not_slip');
+    await finishRequest(db, requestId, 'ignored', Date.now() - requestStart, 'not_slip');
     console.log('[Slip Detection] Image is not a recognized slip. Staying silent.');
     return;
   }
@@ -298,7 +300,7 @@ async function handleImageMessage(
   if (!category) category = normalizeCategory(extraction.category, txType);
 
   // Auto-save immediately — no category picker, no user interaction required
-  markStage('saving');
+  await markStage('saving');
   await createTransaction(saveDb, {
     line_user_id: userId,
     line_group_id: groupId,
@@ -308,7 +310,7 @@ async function handleImageMessage(
     merchant: extraction.merchant,
     date: txDate
   });
-  setSlipStage(db, messageId, 'saved', 'done', userId);
+  await setSlipStage(db, messageId, 'saved', 'done', userId);
   console.log(`[Slip Detection] Auto-saved: ${txType} ฿${extraction.amount} [${category}]`);
   logStage(db, requestId, 'slip_saved', {
     type: txType,
@@ -328,13 +330,13 @@ async function handleImageMessage(
 
   try {
     await replyLineMessage(replyToken, [flexMessage]);
-    setSlipStage(db, messageId, 'replied', 'done', userId);
+    await setSlipStage(db, messageId, 'replied', 'done', userId);
     logStage(db, requestId, 'replied');
   } catch (err: any) {
     // reply_ok/reply_fail are logged by the LINE service itself; the slip is
     // already saved, so mark the checkpoint done but flag the outcome
-    setSlipStage(db, messageId, 'replied', 'done', userId);
-    finishRequest(db, requestId, 'failed', Date.now() - requestStart, `reply_failed: ${err?.message || err}`);
+    await setSlipStage(db, messageId, 'replied', 'done', userId);
+    await finishRequest(db, requestId, 'failed', Date.now() - requestStart, `reply_failed: ${err?.message || err}`);
     throw err;
   }
 }

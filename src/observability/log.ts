@@ -63,13 +63,15 @@ export function finishRequest(
   outcome: RequestOutcome,
   latencyMs: number,
   error?: string | null
-): void {
-  if (!db) return;
-  db.prepare(
-    'UPDATE request_logs SET outcome = ?, latency_ms = ?, error = ? WHERE request_id = ?'
-  )
+): Promise<void> {
+  if (!db) return Promise.resolve();
+  // Returned for awaiting — on Workers, un-awaited writes are dropped when
+  // the handler settles, which leaves request rows stuck on 'processing'.
+  return db
+    .prepare('UPDATE request_logs SET outcome = ?, latency_ms = ?, error = ? WHERE request_id = ?')
     .bind(outcome, Math.round(latencyMs), error ? String(error).slice(0, 500) : null, requestId)
     .run()
+    .then(() => undefined)
     .catch(() => {});
 }
 
@@ -93,16 +95,21 @@ export function setSlipStage(
   stage: SlipStage,
   status: 'pending' | 'done' | 'failed' = 'pending',
   userId?: string | null
-): void {
-  if (!db) return;
+): Promise<void> {
+  if (!db) return Promise.resolve();
   const now = Math.floor(Date.now() / 1000);
-  db.prepare(
-    `INSERT INTO pending_slips (message_id, ts, updated_ts, user_hash, stage, status)
-     VALUES (?, ?, ?, ?, ?, ?)
-     ON CONFLICT(message_id) DO UPDATE SET updated_ts = excluded.updated_ts, stage = excluded.stage, status = excluded.status`
-  )
+  // Returned for awaiting — a checkpoint write dropped by the Workers runtime
+  // would leave the slip stuck 'pending' forever, which is exactly the state
+  // this table exists to detect.
+  return db
+    .prepare(
+      `INSERT INTO pending_slips (message_id, ts, updated_ts, user_hash, stage, status)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(message_id) DO UPDATE SET updated_ts = excluded.updated_ts, stage = excluded.stage, status = excluded.status`
+    )
     .bind(messageId, now, now, hashUserId(userId), stage, status)
     .run()
+    .then(() => undefined)
     .catch(() => {});
 }
 

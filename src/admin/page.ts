@@ -63,46 +63,68 @@ tr:last-child td { border-bottom:none; }
   <div id="root"><div class="empty">กำลังโหลด…</div></div>
 </div>
 <script>
-let KEY = sessionStorage.getItem('adminKey') || '';
-const $ = id => document.getElementById(id);
-const esc = s => String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-const fmtN = n => Number(n||0).toLocaleString('th-TH');
-const fmtT = ts => { const d = new Date(ts*1000); return d.toLocaleDateString('th-TH',{day:'numeric',month:'short'}) + ' ' + d.toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'}); };
+// Written in conservative ES2017 (no ?. ?? or parameterless catch) so older
+// mobile browsers can parse the whole script — one syntax error kills the page.
+var store = {
+  get: function(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } },
+  set: function(k, v) { try { sessionStorage.setItem(k, v); } catch (e) { /* ignore */ } },
+  del: function(k) { try { sessionStorage.removeItem(k); } catch (e) { /* ignore */ } }
+};
+var KEY = store.get('adminKey') || '';
+function $(id) { return document.getElementById(id); }
+function esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function fmtN(n) { return Number(n||0).toLocaleString('th-TH'); }
+function fmtT(ts) { var d = new Date(ts*1000); return d.toLocaleDateString('th-TH',{day:'numeric',month:'short'}) + ' ' + d.toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'}); }
 
 function loginScreen(msg) {
   $('root').innerHTML = '<div class="login card"><h1>🔐 Admin Access</h1>' +
-    '<div class="sub" style="margin:6px 0 0">' + (msg || 'ใส่ Admin Key เพื่อเข้าดูแดชบอร์ด') + '</div>' +
-    '<input type="password" id="k" placeholder="ADMIN_KEY" onkeydown="if(event.key===\\'Enter\\')saveKey()">' +
+    '<div class="sub" style="margin:6px 0 0">' + (msg || 'ใส่รหัสผ่านเพื่อเข้าดูแดชบอร์ด') + '</div>' +
+    '<input type="password" id="k" placeholder="รหัสผ่าน" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false" onkeydown="if(event.key===\\'Enter\\'||event.keyCode===13)saveKey()">' +
+    '<button type="button" onclick="toggleShow()" style="background:none;border:none;color:var(--muted);font-size:12px;cursor:pointer;margin-top:-8px">👁 แสดงรหัสที่พิมพ์</button>' +
     '<button onclick="saveKey()">เข้าสู่ระบบ</button></div>';
+}
+function toggleShow() {
+  var k = $('k');
+  k.type = k.type === 'password' ? 'text' : 'password';
 }
 function saveKey() {
   KEY = $('k').value.trim();
   if (!KEY) return;
-  sessionStorage.setItem('adminKey', KEY);
+  store.set('adminKey', KEY);
   load();
 }
-function logout() { sessionStorage.removeItem('adminKey'); KEY=''; loginScreen(); }
+function logout() { store.del('adminKey'); KEY=''; loginScreen(); }
 
 function dot(ok) { return '<span class="dot ' + (ok ? 'ok' : 'bad') + '"></span>'; }
 
 async function load() {
   if (!KEY) { loginScreen(); return; }
   $('refresh').disabled = true;
-  let d;
+  var d;
   try {
-    const r = await fetch('/api/admin/overview', { headers: { 'x-admin-key': KEY } });
-    if (r.status === 401) { KEY=''; sessionStorage.removeItem('adminKey'); loginScreen('Key ไม่ถูกต้อง ลองอีกครั้ง'); return; }
+    var r = await fetch('/api/admin/overview', { headers: { 'x-admin-key': KEY } });
+    if (r.status === 401) {
+      var typedLen = KEY.length;
+      KEY=''; store.del('adminKey');
+      loginScreen('รหัสไม่ถูกต้อง (ที่พิมพ์มา ' + typedLen + ' ตัวอักษร — ต้องการ 10 ตัว) ลองอีกครั้ง หรือกด 👁 เพื่อดูที่พิมพ์');
+      return;
+    }
     if (!r.ok) throw new Error('HTTP ' + r.status);
     d = await r.json();
   } catch (e) {
-    $('root').innerHTML = '<div class="err">โหลดข้อมูลไม่สำเร็จ: ' + esc(e.message) + '</div>';
+    $('root').innerHTML = '<div class="err">โหลดข้อมูลไม่สำเร็จ: ' + esc(e && e.message ? e.message : e) + '</div>';
     return;
   } finally { $('refresh').disabled = false; }
   $('gen').innerHTML = 'อัปเดต ' + new Date(d.generated_at).toLocaleTimeString('th-TH') + ' · <a href="#" onclick="logout()">ออกจากระบบ</a>';
 
-  const s = d.services;
-  const m = d.metrics || {};
-  const aiLast = d.ai24h.length ? Math.max(...d.ai24h.map(x => x.last_ts)) : null;
+  var s = d.services;
+  var m = d.metrics || {};
+  var slips = m.slips || {};
+  var wl = m.webhook_latency || {};
+  var al = m.ai_latency || {};
+  var ocr = m.ocr || {};
+  var reply = m.reply || {};
+  var aiLast = d.ai24h.length ? Math.max.apply(null, d.ai24h.map(function(x){ return x.last_ts; })) : null;
 
   const alertBanner = (d.alerts && d.alerts.length)
     ? '<h2>การแจ้งเตือน</h2>' + d.alerts.map(a =>
@@ -113,29 +135,29 @@ async function load() {
       ).join('')
     : '';
 
-  const fmtMs = v => (v == null ? '—' : v >= 1000 ? (v / 1000).toFixed(1) + ' s' : v + ' ms');
-  const pct = (v, okBelow) => {
+  const fmtMs = function(v) { return v == null ? '—' : v >= 1000 ? (v / 1000).toFixed(1) + ' s' : v + ' ms'; };
+  const pct = function(v, okBelow) {
     const cls = v > okBelow ? ' style="color:var(--red);font-weight:800"' : '';
     return '<span' + cls + '>' + Math.round(v * 100) + '%</span>';
   };
-  const pctGood = (v, okAbove) => {
+  const pctGood = function(v, okAbove) {
     const cls = v < okAbove ? ' style="color:var(--red);font-weight:800"' : '';
     return '<span' + cls + '>' + Math.round(v * 100) + '%</span>';
   };
   const metricsHtml =
     '<h2>เมตริก (24 ชม.)</h2>' +
     '<div class="card">' +
-      '<div class="kv"><span>สลิปที่ประมวลผล</span><b>' + fmtN(m.slips?.total || 0) + ' <span class="mut">(สำเร็จ ' + fmtN(m.slips?.success || 0) + ' · ผิดพลาด ' + fmtN(m.slips?.failed || 0) + ' · ไม่ใช่สลิป ' + fmtN(m.slips?.ignored || 0) + ')</span></b></div>' +
-      '<div class="kv"><span>อัตราประมวลผลล้มเหลว <span class="mut">(สลิปที่พังกลางทาง)</span></span><b>' + pct((m.slips?.failed || 0) / Math.max(1, m.slips?.total || 0), 0.1) + '</b></div>' +
-      '<div class="kv"><span>OCR fail rate <span class="mut">(7 วัน · 1 ชม. ' + pct(m.ocr?.failRate1h || 0, 0.2) + ')</span></span><b>' + pct(m.ocr?.failRate || 0, 0.2) + '</b></div>' +
-      '<div class="kv"><span>Webhook latency p50 / p95</span><b>' + fmtMs(m.webhook_latency?.p50) + ' / ' + fmtMs(m.webhook_latency?.p95) + ' <span class="mut">(n=' + fmtN(m.webhook_latency?.samples || 0) + ')</span></b></div>' +
-      '<div class="kv"><span>Gemini latency p50 / p95</span><b>' + fmtMs(m.ai_latency?.p50) + ' / ' + fmtMs(m.ai_latency?.p95) + ' <span class="mut">(n=' + fmtN(m.ai_latency?.samples || 0) + ')</span></b></div>' +
+      '<div class="kv"><span>สลิปที่ประมวลผล</span><b>' + fmtN(slips.total || 0) + ' <span class="mut">(สำเร็จ ' + fmtN(slips.success || 0) + ' · ผิดพลาด ' + fmtN(slips.failed || 0) + ' · ไม่ใช่สลิป ' + fmtN(slips.ignored || 0) + ')</span></b></div>' +
+      '<div class="kv"><span>อัตราประมวลผลล้มเหลว <span class="mut">(สลิปที่พังกลางทาง)</span></span><b>' + pct((slips.failed || 0) / Math.max(1, slips.total || 0), 0.1) + '</b></div>' +
+      '<div class="kv"><span>OCR fail rate <span class="mut">(7 วัน · 1 ชม. ' + pct(ocr.failRate1h || 0, 0.2) + ')</span></span><b>' + pct(ocr.failRate || 0, 0.2) + '</b></div>' +
+      '<div class="kv"><span>Webhook latency p50 / p95</span><b>' + fmtMs(wl.p50) + ' / ' + fmtMs(wl.p95) + ' <span class="mut">(n=' + fmtN(wl.samples || 0) + ')</span></b></div>' +
+      '<div class="kv"><span>Gemini latency p50 / p95</span><b>' + fmtMs(al.p50) + ' / ' + fmtMs(al.p95) + ' <span class="mut">(n=' + fmtN(al.samples || 0) + ')</span></b></div>' +
       '<div class="kv"><span>Active users</span><b>' + fmtN(m.active_users_24h || 0) + '</b></div>' +
-      '<div class="kv"><span>LINE reply success rate</span><b>' + pctGood(m.reply?.successRate ?? 1, 0.95) + ' <span class="mut">(' + fmtN(m.reply?.ok || 0) + ' ok / ' + fmtN(m.reply?.fail || 0) + ' fail)</span></b></div>' +
+      '<div class="kv"><span>LINE reply success rate</span><b>' + pctGood(reply.successRate == null ? 1 : reply.successRate, 0.95) + ' <span class="mut">(' + fmtN(reply.ok || 0) + ' ok / ' + fmtN(reply.fail || 0) + ' fail)</span></b></div>' +
       '<div class="kv"><span>สลิปค้างใน pipeline</span><b>' + (m.pending_slips > 0 ? '<span style="color:var(--red);font-weight:800">' + fmtN(m.pending_slips) + '</span>' : '0') + '</b></div>' +
       '<div class="kv"><span>Signature ผิดพลาด (1 ชม.)</span><b>' + (m.signature_failures_1h >= 5 ? '<span style="color:var(--red);font-weight:800">' + fmtN(m.signature_failures_1h) + '</span>' : fmtN(m.signature_failures_1h || 0)) + '</b></div>' +
       '<div class="kv"><span>Error แยกตามที่มา <span class="mut">(24 ชม.)</span></span><b>' +
-        ((m.errors_by_source || []).length ? (m.errors_by_source || []).map(x => esc(x.source) + ': ' + fmtN(x.count)).join(' · ') : '<span class="mut">ไม่มี</span>') +
+        ((m.errors_by_source || []).length ? (m.errors_by_source || []).map(function(x) { return esc(x.source) + ': ' + fmtN(x.count); }).join(' · ') : '<span class="mut">ไม่มี</span>') +
       '</b></div>' +
     '</div>';
 
@@ -195,6 +217,17 @@ async function load() {
   $('root').innerHTML = html;
 }
 setInterval(load, 30000);
+// Support one-tap login links: /admin?key=... — consume the param and strip it from the URL
+(function () {
+  try {
+    var qm = location.search.match(/[?&]key=([^&]*)/);
+    if (qm) {
+      var k = decodeURIComponent(qm[1]).trim();
+      if (k) { KEY = k; store.set('adminKey', k); }
+      history.replaceState(null, '', location.pathname);
+    }
+  } catch (e) { /* ignore */ }
+})();
 load();
 </script>
 </body>

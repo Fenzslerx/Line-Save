@@ -130,7 +130,7 @@ export function createAutoSavedFlex(data: AutoSavedData): messagingApi.FlexMessa
         paddingAll: '16px',
         paddingBottom: '10px',
         contents: [
-          { type: 'text', text: 'LineSave', size: 'sm', weight: 'bold', color: accent, flex: 0 },
+          { type: 'text', text: 'นับล้าน', size: 'md', weight: 'bold', color: accent, flex: 0 },
           { type: 'filler', flex: 1 },
           { type: 'text', text: statusText, size: 'xxs', weight: 'bold', color: accent, flex: 0 }
         ]

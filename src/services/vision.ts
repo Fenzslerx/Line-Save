@@ -1,6 +1,7 @@
 import { GoogleGenAI, Type } from '@google/genai';
 import { config } from '../config/env';
 import { ocrImage } from './typhoon';
+import { parseSlipFromOcr, bahtMarkedAmounts } from './slipParser';
 import { getD1 } from '../db/client';
 import { logEvent } from '../db/events';
 
@@ -112,21 +113,6 @@ const SLIP_RESPONSE_SCHEMA = {
 };
 
 /**
- * Numbers sitting next to a currency marker (บาท/THB/฿) are the most
- * trustworthy amount on a Thai slip.
- */
-function bahtMarkedAmounts(text: string): number[] {
-  const amounts: number[] = [];
-  const re = /(?:฿\s*(\d[\d,]*(?:\.\d{1,2})?))|((\d[\d,]*(?:\.\d{1,2})?)\s*(?:บาท|THB))/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    const raw = m[1] ?? m[2];
-    if (raw) amounts.push(parseFloat(raw.replace(/,/g, '')));
-  }
-  return amounts;
-}
-
-/**
  * Post-validation against the OCR text: corrects hallucinated amounts and
  * rejects future dates. Mutates `result` in place.
  */
@@ -203,6 +189,18 @@ export async function extractSlipInfo(
       // Non-fatal: fall back to Gemini reading the image directly
       tryLog('warn', 'typhoon_ocr_fail', String(err?.message || err));
     }
+  }
+
+  // Primary path (free, no AI): Thai slips are templated — a rule-based parse
+  // of the OCR text handles most of them. Gemini is only paid when the rules
+  // cannot confidently read the slip (keeps the free quota alive).
+  if (ocrText) {
+    const parsed = parseSlipFromOcr(ocrText);
+    if (parsed) {
+      tryLog('info', 'ocr_parser_hit', `dir=${parsed.direction} has_date=${parsed.date !== null}`);
+      return parsed;
+    }
+    tryLog('info', 'ocr_parser_miss', `chars=${ocrText.length}`);
   }
 
   // When OCR succeeded we structure TEXT ONLY — no image upload, several

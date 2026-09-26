@@ -194,8 +194,9 @@ describe('Vision LLM Slip Extraction Service (Gemini)', () => {
 
   it('should pass Typhoon OCR text to Gemini when the key is configured', async () => {
     config.typhoon.apiKey = 'test_typhoon_key';
+    // No direction keyword in the text — the rule parser bails and Gemini takes over
     const fetchMock = jest.fn().mockResolvedValue(new Response(
-      JSON.stringify({ choices: [{ message: { content: 'KBank\nโอนเงิน 350.50 บาท\n23/09/2568 นายสมชาย' } }] }),
+      JSON.stringify({ choices: [{ message: { content: 'KBank\nยอดเงิน 350.50 บาท\n23/09/2568 นายสมชาย' } }] }),
       { status: 200 }
     ));
     global.fetch = fetchMock as any;
@@ -218,7 +219,7 @@ describe('Vision LLM Slip Extraction Service (Gemini)', () => {
     expect(contents[0].parts).toHaveLength(1);
     const promptText = contents[0].parts[0].text;
     expect(promptText).toContain('OCR text below was extracted from a photo');
-    expect(promptText).toContain('โอนเงิน 350.50');
+    expect(promptText).toContain('ยอดเงิน 350.50');
     expect(contents[0].parts[0].inlineData).toBeUndefined();
     // Deterministic extraction settings
     const requestConfig = promptSpy.mock.calls[0][0].config;
@@ -227,6 +228,30 @@ describe('Vision LLM Slip Extraction Service (Gemini)', () => {
     expect(requestConfig.abortSignal).toBeDefined();
     // OCR endpoint was actually called
     expect(fetchMock.mock.calls[0][0]).toContain('api.opentyphoon.ai');
+
+    config.typhoon.apiKey = '';
+    delete (global as any).fetch;
+  });
+
+  it('should skip Gemini entirely when the rule-based parser reads the OCR text', async () => {
+    config.typhoon.apiKey = 'test_typhoon_key';
+    const fetchMock = jest.fn().mockResolvedValue(new Response(
+      JSON.stringify({ choices: [{ message: { content: 'KBank\nโอนเงินสำเร็จ\nจำนวนเงิน 350.50 บาท\n23/09/2568' } }] }),
+      { status: 200 }
+    )) as any;
+    global.fetch = fetchMock as any;
+
+    const promptSpy = jest.fn();
+    const mockGemini = { models: { generateContent: promptSpy } } as any;
+
+    const result = await extractSlipInfo(dummyBuffer, 'image/jpeg', mockGemini);
+
+    // Templated Thai slips never reach the AI — zero quota usage
+    expect(result.is_slip).toBe(true);
+    expect(result.amount).toBe(350.5);
+    expect(result.direction).toBe('expense');
+    expect(result.date).toBe('2025-09-23');
+    expect(promptSpy).not.toHaveBeenCalled();
 
     config.typhoon.apiKey = '';
     delete (global as any).fetch;
@@ -343,8 +368,11 @@ describe('Vision LLM Slip Extraction Service (Gemini)', () => {
 
   it('should retry with the image attached when the text-only pass misses an obvious slip', async () => {
     config.typhoon.apiKey = 'test_typhoon_key';
+    // Direction keywords present but no baht-marked amount — the rule parser
+    // bails (no amount), so Gemini gets the text first and misses, then the
+    // image fallback kicks in.
     global.fetch = jest.fn().mockResolvedValue(new Response(
-      JSON.stringify({ choices: [{ message: { content: 'KBank โอนเงินสำเร็จ จำนวนเงิน 350.50 บาท 23/09/2568' } }] }),
+      JSON.stringify({ choices: [{ message: { content: 'KBank โอนเงินสำเร็จ ยืนยันรายการ 23/09/2568' } }] }),
       { status: 200 }
     )) as any;
 

@@ -1,0 +1,197 @@
+/**
+ * AI-free slip parser — reads a Thai bank slip / receipt from Typhoon OCR text
+ * using format rules instead of an LLM. Thai slips are highly templated
+ * (amount next to บาท, direction keywords, BE dates), so a rule-based parse
+ * covers most slips with zero API cost. Returns null when not confident —
+ * the caller falls back to Gemini for those.
+ */
+import { SlipExtractionResult } from './vision';
+
+/** Numbers sitting next to a currency marker (บาท/THB/฿) — the most trustworthy amounts. */
+export function bahtMarkedAmounts(text: string): number[] {
+  const amounts: number[] = [];
+  const re = /(?:฿\s*(\d[\d,]*(?:\.\d{1,2})?))|((\d[\d,]*(?:\.\d{1,2})?)\s*(?:บาท|THB))/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const raw = m[1] ?? m[2];
+    if (raw) amounts.push(parseFloat(raw.replace(/,/g, '')));
+  }
+  return amounts;
+}
+
+const AMOUNT_KEYWORDS = [
+  'จำนวนเงิน', 'ยอดรวม', 'รวมทั้งสิ้น', 'ยอดชำระ', 'ยอดเงิน',
+  'ค่าบริการ', 'จำนวน', 'รวม', 'ยอด'
+];
+
+const INCOME_HINTS = ['เงินเข้า', 'รับโอน', 'รับเงิน', 'โอนเข้า', 'เครดิตเงินเข้า', 'รับจาก', 'เงินโอนเข้า'];
+const EXPENSE_HINTS = [
+  'โอนสำเร็จ', 'โอนเงิน', 'โอนออก', 'โอนผ่าน', 'ชำระเงิน', 'ชำระบิล', 'จ่ายเงิน',
+  'สแกนจ่าย', 'จ่ายด้วย', 'ยอดชำระ', 'ค่าสินค้า', 'ใบเสร็จ', 'payment', 'purchase'
+];
+
+const THAI_MONTHS: [RegExp, number][] = [
+  [/ม\.?ค|มกรา/, 1], [/ก\.?พ|กุมภา/, 2], [/มี\.?ค|มีนา/, 3], [/เม\.?ย|เมษา/, 4],
+  [/พ\.?ค|พฤษภา/, 5], [/มิ\.?ย|มิถุนา/, 6], [/ก\.?ค|กรกฎา/, 7], [/ส\.?ค|สิงหา/, 8],
+  [/ก\.?ย|กันยา/, 9], [/ต\.?ค|ตุลา/, 10], [/พ\.?ย|พฤศจิกา/, 11], [/ธ\.?ค|ธันวา/, 12]
+];
+
+function toGregorianYear(year: number): number {
+  if (year >= 2400 && year <= 2700) return year - 543; // Buddhist Era
+  return year;
+}
+
+function futureDate(date: string): boolean {
+  const ts = new Date(`${date}T00:00:00Z`).getTime();
+  return isNaN(ts) || ts > Date.now() + 2 * 24 * 60 * 60 * 1000;
+}
+
+/** "15/06/2568", "2026-09-23", "15 ก.ย. 2569" — first plausible date near "วันที่" wins. */
+export function parseThaiDate(text: string): string | null {
+  // Thai month-name dates
+  for (const [monRe, month] of THAI_MONTHS) {
+    const re = new RegExp(`(\\d{1,2})\\s+(${monRe.source})[a-zก-๙]*\\.?\\s+(\\d{2,4})`, 'i');
+    const m = re.exec(text);
+    if (m) {
+      const day = +m[1];
+      const year = toGregorianYear(+m[3]);
+      const date = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      if (day >= 1 && day <= 31 && !futureDate(date)) return date;
+    }
+  }
+  // Numeric dates — pick the candidate closest to "วันที่" when several exist
+  const candidates: { date: string; pos: number }[] = [];
+  const re = /(\d{1,4})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    let day: number, month: number, year: number;
+    if (m[1].length === 4) { year = toGregorianYear(+m[1]); month = +m[2]; day = +m[3]; }
+    else { day = +m[1]; month = +m[2]; year = m[3].length === 2 ? toGregorianYear(2500 + +m[3]) : toGregorianYear(+m[3]); }
+    if (month < 1 || month > 12 || day < 1 || day > 31) continue;
+    const date = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    if (!futureDate(date)) candidates.push({ date, pos: m.index });
+  }
+  if (!candidates.length) return null;
+  // Anchor: a candidate is "the transaction date" when "วันที่" appears shortly
+  // BEFORE it — an earlier unrelated number (reference ids etc.) must not win.
+  let best: { date: string; anchor: number; pos: number } | null = null;
+  for (const c of candidates) {
+    const before = text.slice(0, c.pos);
+    const anchor = before.lastIndexOf('วันที่');
+    const dist = anchor < 0 ? Infinity : c.pos - (anchor + 'วันที่'.length);
+    if (!best || dist < best.anchor || (dist === best.anchor && c.pos > best.pos)) {
+      best = { date: c.date, anchor: dist, pos: c.pos };
+    }
+  }
+  return best!.date;
+}
+
+/** Best amount: the baht-marked number right AFTER an amount keyword (next ~80 chars). */
+export function parseAmount(text: string): number | null {
+  const amounts = bahtMarkedAmounts(text);
+  if (amounts.length === 0) return null;
+  const unique = [...new Set(amounts)];
+  if (unique.length === 1) return unique[0];
+
+  let best: { amount: number; dist: number } | null = null;
+  for (const kw of AMOUNT_KEYWORDS) {
+    const kwPos = text.indexOf(kw);
+    if (kwPos < 0) continue;
+    const re = /(?:฿\s*(\d[\d,]*(?:\.\d{1,2})?))|((\d[\d,]*(?:\.\d{1,2})?)\s*(?:บาท|THB))/gi;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      const raw = m[1] ?? m[2];
+      if (!raw) continue;
+      // Only amounts following the keyword count — the previous line's total
+      // (e.g. "20 บาท\nยอดชำระ ... 129 บาท") must not win by sitting closer.
+      const dist = m.index - kwPos;
+      if (dist < 0 || dist > 80) continue;
+      if (!best || dist < best.dist) best = { amount: parseFloat(raw.replace(/,/g, '')), dist };
+    }
+  }
+  return best ? best.amount : null;
+}
+
+function detectDirection(text: string): 'income' | 'expense' | null {
+  const has = (hints: string[]) => hints.some(h => text.toLowerCase().includes(h.toLowerCase()));
+  const income = has(INCOME_HINTS);
+  const expense = has(EXPENSE_HINTS);
+  if (income && !expense) return 'income';
+  if (expense && !income) return 'expense';
+  if (income && expense) {
+    // Whichever keyword appears first usually states the transaction type
+    const firstIncome = Math.min(...INCOME_HINTS.map(h => {
+      const i = text.toLowerCase().indexOf(h.toLowerCase()); return i < 0 ? Infinity : i;
+    }));
+    const firstExpense = Math.min(...EXPENSE_HINTS.map(h => {
+      const i = text.toLowerCase().indexOf(h.toLowerCase()); return i < 0 ? Infinity : i;
+    }));
+    return firstIncome <= firstExpense ? 'income' : 'expense';
+  }
+  return null;
+}
+
+function parseMerchant(text: string, direction: 'income' | 'expense'): string | null {
+  const markers = direction === 'income'
+    ? ['รับจาก', 'จาก', 'โอนโดย', 'ผู้โอน']
+    : ['โอนไปที่', 'โอนไป', 'ถึง', 'ผู้รับ', 'ร้าน', 'สาขา', 'ที่'];
+  const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean);
+  for (const marker of markers) {
+    for (const line of lines) {
+      const idx = line.indexOf(marker);
+      if (idx < 0) continue;
+      const value = line.slice(idx + marker.length).replace(/^[:\-\s]+/, '').trim();
+      if (value && value.length >= 2) return value.slice(0, 60);
+    }
+  }
+  return null;
+}
+
+const EXPENSE_CATEGORY_HINTS: [string, string[]][] = [
+  ['อาหารและเครื่องดื่ม', ['กาแฟ', 'ชานม', 'ร้านกาแฟ', 'cafe', 'starbucks', 'อาหาร', 'ข้าว', 'ส้มตำ', 'สเต๊ก', 'ชาบู', 'พิซซ่า', 'pizza', 'kfc', 'mcd', 'ขนม', 'เบเกอรี่', 'bakery', 'เบียร์', 'เหล้า', 'foodpanda', 'grabfood', 'lineman', 'line man', 'ฟู้ด', 'restaurant', 'หมูกระทะ', 'แหนม', 'ตำแซบ']],
+  ['การเดินทาง', ['น้ำมัน', 'ปั๊ม', 'ptt', 'บางจาก', 'shell', 'ค่าทาง', 'ด่วน', 'toll', 'แท็กซี่', 'taxi', 'grab', 'บขส.', 'รถไฟ', 'mrt', 'bts', 'ตั๋ว', 'ที่จอดรถ', 'จอดรถ', 'โรงแรม', 'ที่พัก', 'เช่ารถ', 'ค่ารถ']],
+  ['บิลและสาธารณูปโภค', ['ค่าไฟ', 'ค่าน้ำ', 'ค่าเน็ต', 'อินเทอร์เน็ต', 'ค่าโทร', 'เติมเงิน', 'ais', 'true', 'dtac', 'nt ', '3bb', 'ประกัน', 'ค่าเช่า', 'พรบ', 'ภาษี', 'water', 'electric', 'ค่าโทรศัพท์', 'บัตรเครดิต', 'ผ่อน']],
+  ['ของใช้ทั่วไป', ['7-eleven', 'เซเว่น', 'ซีเว่น', 'lotus', 'บิ๊กซี', 'makro', 'วัตสัน', 'watsons', 'shopee', 'lazada', 'tiktok shop', 'ร้านยา', 'ฟาร์มา', 'ยา', 'เครื่องใช้', 'ห้าง', 'ตลาดนัด', 'ร้านค้า']]
+];
+
+function parseCategory(text: string, direction: 'income' | 'expense', merchant: string | null): string {
+  if (direction === 'income') {
+    const t = (merchant || '') + ' ' + text;
+    if (/เงินเดือน|salary|โบนัส|bonus|ค่าคอม/i.test(t)) return 'เงินเดือน';
+    if (/ขาย|shopee|lazada|รายได้|คอมมิชชัน/i.test(t)) return 'ขายของ';
+    return 'รายรับทั่วไป';
+  }
+  const t = (merchant || '') + ' ' + text;
+  for (const [category, words] of EXPENSE_CATEGORY_HINTS) {
+    if (words.some(w => t.toLowerCase().includes(w.toLowerCase()))) return category;
+  }
+  return 'อื่นๆ';
+}
+
+/**
+ * Rule-based extraction from OCR text. Returns null when the text does not
+ * look like a slip (no amount / no direction keyword) — callers should then
+ * use the AI path.
+ */
+export function parseSlipFromOcr(ocrText: string): SlipExtractionResult | null {
+  if (!ocrText || ocrText.length < 15) return null;
+
+  const amount = parseAmount(ocrText);
+  const direction = detectDirection(ocrText);
+  if (amount === null || amount <= 0 || !direction) return null;
+
+  const date = parseThaiDate(ocrText);
+  const merchant = parseMerchant(ocrText, direction);
+  const category = parseCategory(ocrText, direction, merchant);
+
+  return {
+    is_slip: true,
+    amount,
+    date,
+    merchant,
+    direction,
+    category,
+    // Rule-based parse of templated Thai slips is reliable when amount+direction both match
+    confidence: 'high'
+  };
+}

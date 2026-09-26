@@ -76,7 +76,9 @@ describe('D1 Query Layer', () => {
     expect(sql).toContain('user_id');
     expect(sql).toContain('group_id');
     expect(sql).toContain('type');
-    expect(params).toEqual(['U123', 'G123', 'income', 'เงินเดือน', 350, 'บริษัท', '2026-09-25']);
+    // First param is the generated row id (returned so the chat card can offer a type toggle)
+    expect(params[0]).toEqual(expect.any(String));
+    expect(params.slice(1)).toEqual(['U123', 'G123', 'income', 'เงินเดือน', 350, 'บริษัท', '2026-09-25']);
   });
 
   it('should summarize by category with date filters applied in group mode', async () => {

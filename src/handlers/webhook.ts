@@ -1,9 +1,11 @@
 import { Request, Response } from 'express';
 import crypto from 'crypto';
 import { config } from '../config/env';
+import { getD1, D1Database } from '../db/client';
+import { TransactionRecord } from '../db/queries';
+import { SlipExtractionResult } from '../services/vision';
 import { downloadMessageImage, replyLineMessage, showLoadingAnimation } from '../services/line';
 import { extractSlipInfo } from '../services/vision';
-import { getD1 } from '../db/client';
 import {
   createTransaction,
   getCategorySummary,
@@ -11,9 +13,11 @@ import {
   upsertUser,
   upsertGroup,
   getCachedExtraction,
-  saveExtractionCache
+  saveExtractionCache,
+  findDuplicateSlip,
+  getTransactionById
 } from '../db/queries';
-import { findCategoryRule } from '../db/liff';
+import { findCategoryRule, updateTransaction } from '../db/liff';
 import { logEvent } from '../db/events';
 import {
   hashUserId,
@@ -26,7 +30,8 @@ import {
 } from '../observability/log';
 import {
   createAutoSavedFlex,
-  createSummaryFlex
+  createSummaryFlex,
+  createDuplicateSlipFlex
 } from '../templates/flex';
 
 const EXPENSE_CATEGORIES = ['อาหารและเครื่องดื่ม', 'การเดินทาง', 'ของใช้ทั่วไป', 'บิลและสาธารณูปโภค', 'อื่นๆ'];
@@ -53,6 +58,51 @@ function normalizeCategory(raw: string | null, type: 'income' | 'expense'): stri
     }
   }
   return 'อื่นๆ';
+}
+
+/**
+ * Category for a parsed slip: a user-taught rule (LIFF) wins, then the LLM's
+ * normalized guess.
+ */
+async function resolveSlipCategory(
+  db: D1Database,
+  merchant: string | null,
+  rawCategory: string | null,
+  type: 'income' | 'expense'
+): Promise<string> {
+  if (merchant) {
+    const rule = await findCategoryRule(db, merchant).catch(() => null);
+    if (rule && rule.type === type) return rule.category;
+  }
+  return normalizeCategory(rawCategory, type);
+}
+
+/**
+ * Persists a parsed slip as a transaction. Shared by the auto-save pipeline
+ * and the "บันทึกอยู่ดี" postback on the duplicate-warning card.
+ */
+async function saveSlipFromExtraction(
+  db: D1Database,
+  userId: string,
+  groupId: string | null,
+  extraction: SlipExtractionResult,
+  precomputedCategory?: string
+): Promise<TransactionRecord> {
+  if (extraction.amount === null || extraction.amount === undefined) {
+    throw new Error('slip amount missing');
+  }
+  const txType: 'income' | 'expense' = extraction.direction === 'income' ? 'income' : 'expense';
+  const category = precomputedCategory ?? (await resolveSlipCategory(db, extraction.merchant, extraction.category, txType));
+  const txDate = extraction.date || new Date().toISOString().split('T')[0];
+  return createTransaction(db, {
+    line_user_id: userId,
+    line_group_id: groupId,
+    amount: extraction.amount,
+    type: txType,
+    category,
+    merchant: extraction.merchant,
+    date: txDate
+  });
 }
 
 /**
@@ -171,11 +221,10 @@ export async function processWebhookEvent(event: any): Promise<void> {
         await handleTextMessage(event, userId, groupId, requestId);
       }
     }
-    // 2. Handle Postback — kept as a no-op: the bot now auto-saves slips, so no
-    // interactive postback cards are sent anymore (legacy clients may still send events).
+    // 2. Handle Postback — type toggle on the auto-saved card and the
+    // save/skip buttons on the duplicate-slip warning card.
     else if (event.type === 'postback') {
-      await finishRequest(db, requestId, 'ignored', Date.now() - t0);
-      return;
+      await handlePostback(event, userId, requestId, t0);
     }
 
     await finishRequest(db, requestId, 'success', Date.now() - t0);
@@ -292,40 +341,70 @@ async function handleImageMessage(
 
   // Category priority: a rule the user taught via LIFF > the LLM's guess > "อื่นๆ"
   const saveDb = db ?? getD1();
-  let category = '';
-  if (extraction.merchant) {
-    const rule = await findCategoryRule(saveDb, extraction.merchant).catch(() => null);
-    if (rule && rule.type === txType) category = rule.category;
+  const category = await resolveSlipCategory(saveDb, extraction.merchant, extraction.category, txType);
+
+  // Content-based dedup: same user + type + amount + date + merchant already
+  // saved means this is very likely the same slip sent again (re-screenshot,
+  // forward, re-upload). Ask instead of silently double-booking.
+  if (db) {
+    const dup = await findDuplicateSlip(saveDb, {
+      userId,
+      amount: extraction.amount,
+      type: txType,
+      date: txDate,
+      merchant: extraction.merchant
+    }).catch(() => null);
+    if (dup) {
+      await setSlipStage(db, messageId, 'awaiting_confirm', 'pending', userId);
+      logStage(db, requestId, 'duplicate_detected', { duplicate_of: dup.id });
+      console.log(`[Slip Detection] Duplicate content of transaction ${dup.id} — asking user to confirm.`);
+      try {
+        await replyLineMessage(replyToken, [
+          createDuplicateSlipFlex({
+            existing: {
+              amount: dup.amount,
+              type: dup.type,
+              category: dup.category ?? 'อื่นๆ',
+              merchant: dup.merchant ?? null,
+              date: dup.date
+            },
+            incoming: {
+              amount: extraction.amount,
+              type: txType,
+              category,
+              merchant: extraction.merchant,
+              date: txDate
+            },
+            messageId
+          })
+        ]);
+      } finally {
+        await finishRequest(db, requestId, 'ignored', Date.now() - requestStart, 'duplicate_slip');
+      }
+      return;
+    }
   }
-  if (!category) category = normalizeCategory(extraction.category, txType);
 
   // Auto-save immediately — no category picker, no user interaction required
   await markStage('saving');
-  await createTransaction(saveDb, {
-    line_user_id: userId,
-    line_group_id: groupId,
-    amount: extraction.amount,
-    type: txType,
-    category,
-    merchant: extraction.merchant,
-    date: txDate
-  });
+  const saved = await saveSlipFromExtraction(saveDb, userId, groupId, extraction, category);
   await setSlipStage(db, messageId, 'saved', 'done', userId);
-  console.log(`[Slip Detection] Auto-saved: ${txType} ฿${extraction.amount} [${category}]`);
+  console.log(`[Slip Detection] Auto-saved: ${saved.type} ฿${saved.amount} [${saved.category}]`);
   logStage(db, requestId, 'slip_saved', {
-    type: txType,
-    amount: extraction.amount,
-    category,
+    type: saved.type,
+    amount: saved.amount,
+    category: saved.category,
     confidence: extraction.confidence
   });
-  logEvent(db, 'info', 'bot', 'slip_saved', `${txType} ฿${extraction.amount} [${category}] user=${hashUserId(userId)}${groupId ? ` in ${groupId}` : ''}`);
+  logEvent(db, 'info', 'bot', 'slip_saved', `${saved.type} ฿${saved.amount} [${saved.category}] user=${hashUserId(userId)}${groupId ? ` in ${groupId}` : ''}`);
 
   const flexMessage = createAutoSavedFlex({
-    amount: extraction.amount,
-    merchant: extraction.merchant,
-    date: txDate,
-    type: txType,
-    category
+    amount: saved.amount,
+    merchant: saved.merchant ?? null,
+    date: saved.date,
+    type: saved.type,
+    category: saved.category ?? 'อื่นๆ',
+    txId: saved.id
   });
 
   try {
@@ -418,5 +497,109 @@ async function handleTextMessage(
     });
 
     await replyLineMessage(replyToken, [summaryFlex]);
+  }
+}
+
+/**
+ * Handles postback actions from the bot's own Flex cards:
+ *   act=toggle_type&tx=<id> — flip a saved transaction income <-> expense
+ *   act=dup_save&msg=<messageId> — confirm saving a suspected-duplicate slip
+ *   act=dup_skip&msg=<messageId> — dismiss the duplicate warning
+ */
+async function handlePostback(
+  event: any,
+  userId: string | undefined,
+  requestId: string,
+  requestStart: number
+) {
+  const params = new URLSearchParams(String(event.postback?.data || ''));
+  const act = params.get('act');
+  if (!act) return; // unknown/legacy postback — nothing to do
+
+  const replyToken = event.replyToken;
+  const db = getD1();
+  const groupId = event.source?.groupId || event.source?.roomId || null;
+
+  try {
+    if (act === 'toggle_type') {
+      const txId = params.get('tx') || '';
+      if (!userId || !txId) {
+        await replyLineMessage(replyToken, [{ type: 'text', text: 'ใช้ปุ่มนี้ไม่ได้ในบริบทนี้ครับ' }]);
+        return;
+      }
+      const tx = await getTransactionById(db, userId, txId);
+      if (!tx) {
+        await replyLineMessage(replyToken, [{ type: 'text', text: 'ไม่พบรายการนี้ หรือไม่ใช่รายการของคุณครับ' }]);
+        return;
+      }
+      const newType: 'income' | 'expense' = tx.type === 'income' ? 'expense' : 'income';
+      const txCategory = tx.category ?? 'อื่นๆ';
+      const fields: { type: 'income' | 'expense'; category?: string } = { type: newType };
+      // Keep the category plausible for the new type
+      if (newType === 'income' && !INCOME_CATEGORIES.includes(txCategory)) fields.category = 'รายรับทั่วไป';
+      if (newType === 'expense' && !EXPENSE_CATEGORIES.includes(txCategory)) fields.category = 'อื่นๆ';
+      await updateTransaction(db, userId, txId, fields);
+      await replyLineMessage(replyToken, [
+        {
+          type: 'text',
+          text: `เปลี่ยนรายการ ${tx.type === 'income' ? '+' : '−'}฿${tx.amount.toLocaleString()} เป็น${newType === 'income' ? 'รายรับ' : 'รายจ่าย'}เรียบร้อยครับ`
+        }
+      ]);
+      return;
+    }
+
+    if (act === 'dup_save' || act === 'dup_skip') {
+      const msgId = params.get('msg') || '';
+      if (!userId || !msgId) {
+        await replyLineMessage(replyToken, [{ type: 'text', text: 'ใช้ปุ่มนี้ไม่ได้ในบริบทนี้ครับ' }]);
+        return;
+      }
+
+      if (act === 'dup_skip') {
+        await setSlipStage(db, msgId, 'skipped', 'done', userId);
+        await replyLineMessage(replyToken, [{ type: 'text', text: 'ไม่บันทึกรายการซ้ำให้ครับ' }]);
+        return;
+      }
+
+      // dup_save — the extraction is cached under the message id during the
+      // original pipeline; a second tap hits the content dedup and is refused.
+      const extraction = await getCachedExtraction(db, `msg:${msgId}`);
+      if (!extraction || !extraction.is_slip || extraction.amount === null) {
+        await setSlipStage(db, msgId, 'extracted', 'failed', userId);
+        await replyLineMessage(replyToken, [
+          { type: 'text', text: 'หมดอายุการยืนยันแล้ว ส่งสลิปมาใหม่ได้เลยครับ' }
+        ]);
+        return;
+      }
+      const dup = await findDuplicateSlip(db, {
+        userId,
+        amount: extraction.amount,
+        type: extraction.direction === 'income' ? 'income' : 'expense',
+        date: extraction.date || new Date().toISOString().split('T')[0],
+        merchant: extraction.merchant
+      }).catch(() => null);
+      if (dup) {
+        await setSlipStage(db, msgId, 'saved', 'done', userId);
+        await replyLineMessage(replyToken, [
+          { type: 'text', text: `รายการนี้บันทึกไว้แล้วครับ (${dup.type === 'income' ? '+' : '−'}฿${dup.amount.toLocaleString()} · ${dup.category})` }]
+        );
+        return;
+      }
+      const saved = await saveSlipFromExtraction(db, userId, groupId, extraction);
+      await setSlipStage(db, msgId, 'saved', 'done', userId);
+      await replyLineMessage(replyToken, [
+        createAutoSavedFlex({
+          amount: saved.amount,
+          merchant: saved.merchant ?? null,
+          date: saved.date,
+          type: saved.type,
+          category: saved.category ?? 'อื่นๆ',
+          txId: saved.id
+        })
+      ]);
+      return;
+    }
+  } finally {
+    await finishRequest(db, requestId, 'success', Date.now() - requestStart);
   }
 }

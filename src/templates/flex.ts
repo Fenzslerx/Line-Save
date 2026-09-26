@@ -7,6 +7,27 @@ export interface AutoSavedData {
   date: string;
   type: 'expense' | 'income';
   category: string;
+  /** Set when the caller knows the saved row id — enables the type-toggle button */
+  txId?: string | null;
+}
+
+export interface DuplicateSlipData {
+  existing: {
+    amount: number;
+    type: 'expense' | 'income';
+    category: string;
+    merchant: string | null;
+    date: string;
+  };
+  incoming: {
+    amount: number;
+    type: 'expense' | 'income';
+    category: string;
+    merchant: string | null;
+    date: string;
+  };
+  /** LINE message id of the new slip — postback actions reference it */
+  messageId: string;
 }
 
 export interface SummaryData {
@@ -62,17 +83,29 @@ export function createAutoSavedFlex(data: AutoSavedData): messagingApi.FlexMessa
     }
   ];
 
-  const footer: messagingApi.FlexComponent[] = liffUrl
-    ? [
-        {
-          type: 'button',
-          action: { type: 'uri', label: '📊 ดูรายการทั้งหมด', uri: liffUrl },
-          style: 'primary',
-          color: '#06C755',
-          height: 'sm'
-        }
-      ]
-    : [];
+  const footer: messagingApi.FlexComponent[] = [];
+  if (data.txId) {
+    footer.push({
+      type: 'button',
+      action: {
+        type: 'postback',
+        label: isIncome ? 'สลับเป็นรายจ่าย' : 'สลับเป็นรายรับ',
+        data: `act=toggle_type&tx=${encodeURIComponent(data.txId)}`,
+        displayText: 'สลับประเภทรายการ'
+      },
+      style: 'secondary',
+      height: 'sm'
+    });
+  }
+  if (liffUrl) {
+    footer.push({
+      type: 'button',
+      action: { type: 'uri', label: 'ดูรายการทั้งหมด', uri: liffUrl },
+      style: 'primary',
+      color: '#06C755',
+      height: 'sm'
+    });
+  }
 
   return {
     type: 'flex',
@@ -112,6 +145,109 @@ export function createAutoSavedFlex(data: AutoSavedData): messagingApi.FlexMessa
       footer: footer.length
         ? { type: 'box', layout: 'vertical', spacing: 'sm', contents: footer }
         : undefined
+    }
+  };
+}
+
+/**
+ * Duplicate-slip warning card — shown instead of auto-saving when the extracted
+ * slip content matches an existing transaction. Lets the user confirm a genuine
+ * second payment or skip the duplicate.
+ */
+export function createDuplicateSlipFlex(data: DuplicateSlipData): messagingApi.FlexMessage {
+  const typeLabel = (t: 'expense' | 'income') => (t === 'income' ? 'รายรับ' : 'รายจ่าย');
+  const baht = (n: number) => `฿${n.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const row = (label: string, value: string) =>
+    ({
+      type: 'box',
+      layout: 'horizontal',
+      contents: [
+        { type: 'text', text: label, size: 'sm', color: '#888888', flex: 3 },
+        { type: 'text', text: value, size: 'sm', color: '#111111', weight: 'bold', align: 'end', flex: 5, wrap: true }
+      ]
+    }) as messagingApi.FlexComponent;
+
+  return {
+    type: 'flex',
+    altText: `สลิปนี้น่าจะบันทึกไว้แล้ว (${typeLabel(data.existing.type)} ${baht(data.existing.amount)}) — กดเพื่อยืนยัน`,
+    contents: {
+      type: 'bubble',
+      size: 'mega',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: '#F59E0B',
+        paddingAll: '16px',
+        contents: [
+          {
+            type: 'text',
+            text: 'สลิปนี้น่าจะบันทึกไว้แล้ว',
+            color: '#FFFFFF',
+            weight: 'bold',
+            size: 'md'
+          },
+          {
+            type: 'text',
+            text: `พบรายการ ${typeLabel(data.existing.type)} ${baht(data.existing.amount)} ที่ตรงกันอยู่แล้ว`,
+            color: '#FFFFFF',
+            size: 'sm',
+            margin: 'sm',
+            wrap: true
+          }
+        ]
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'xs',
+        contents: [
+          { type: 'text', text: 'รายการเดิมในระบบ', size: 'xs', color: '#888888', weight: 'bold' },
+          row('ประเภท', typeLabel(data.existing.type)),
+          row('จำนวนเงิน', baht(data.existing.amount)),
+          row('หมวดหมู่', data.existing.category),
+          row('ร้านค้า/ผู้รับ', data.existing.merchant || 'ไม่ระบุ'),
+          row('วันที่', data.existing.date),
+          { type: 'separator', margin: 'md' },
+          {
+            type: 'text',
+            text: 'ถ้าเป็นการจ่ายครั้งใหม่จริง ๆ กด "บันทึกอยู่ดี" ได้เลย',
+            size: 'xs',
+            color: '#888888',
+            wrap: true,
+            margin: 'sm'
+          }
+        ]
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: [
+          {
+            type: 'button',
+            action: {
+              type: 'postback',
+              label: 'บันทึกอยู่ดี',
+              data: `act=dup_save&msg=${encodeURIComponent(data.messageId)}`,
+              displayText: 'บันทึกอยู่ดี'
+            },
+            style: 'primary',
+            color: '#06C755',
+            height: 'sm'
+          },
+          {
+            type: 'button',
+            action: {
+              type: 'postback',
+              label: 'ข้าม ไม่บันทึก',
+              data: `act=dup_skip&msg=${encodeURIComponent(data.messageId)}`,
+              displayText: 'ไม่บันทึก'
+            },
+            style: 'secondary',
+            height: 'sm'
+          }
+        ]
+      }
     }
   };
 }

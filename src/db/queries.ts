@@ -81,12 +81,14 @@ export async function upsertGroup(db: D1Database, group: GroupRecord): Promise<G
  */
 export async function createTransaction(db: D1Database, tx: TransactionRecord): Promise<TransactionRecord> {
   const type = tx.type === 'income' ? 'income' : 'expense';
+  const id = tx.id ?? crypto.randomUUID();
   await db
     .prepare(
       `INSERT INTO transactions (id, user_id, group_id, type, category, amount, merchant, date, source)
-       VALUES (lower(hex(randomblob(16))), ?, ?, ?, ?, ?, ?, ?, 'line-bot')`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'line-bot')`
     )
     .bind(
+      id,
       tx.line_user_id,
       tx.line_group_id ?? null,
       type,
@@ -96,7 +98,67 @@ export async function createTransaction(db: D1Database, tx: TransactionRecord): 
       tx.date
     )
     .run();
-  return { ...tx, type };
+  return { ...tx, id, type };
+}
+
+/**
+ * Content-based slip dedup: a transaction from the same user with the same
+ * type, amount, date and merchant already exists. Catches re-sent slips even
+ * when the image bytes differ (re-screenshot, forwarded image). Merchant is
+ * matched NULL-safely so unspecified-merchant slips only collide with each other.
+ */
+export async function findDuplicateSlip(
+  db: D1Database,
+  slip: { userId: string; amount: number; type: 'income' | 'expense'; date: string; merchant?: string | null }
+): Promise<TransactionRecord | null> {
+  const { results } = await db
+    .prepare(
+      `SELECT id, type, category, amount, merchant, date, source
+       FROM transactions
+       WHERE user_id = ? AND type = ? AND amount = ? AND date = ?
+         AND ((merchant IS NULL AND ? IS NULL) OR merchant = ?)
+       ORDER BY created_at DESC
+       LIMIT 1`
+    )
+    .bind(slip.userId, slip.type, slip.amount, slip.date, slip.merchant ?? null, slip.merchant ?? null)
+    .all();
+  const row = (results || [])[0];
+  // Guard against malformed rows coming back from test doubles / partial schemas
+  if (!row || row.id === undefined || row.amount === undefined || row.amount === null) return null;
+  return {
+    id: String(row.id),
+    line_user_id: slip.userId,
+    type: row.type === 'income' ? 'income' : 'expense',
+    category: String(row.category ?? 'อื่นๆ'),
+    amount: Number(row.amount),
+    merchant: row.merchant ?? null,
+    date: String(row.date)
+  };
+}
+
+export async function getTransactionById(
+  db: D1Database,
+  userId: string,
+  id: string
+): Promise<TransactionRecord | null> {
+  const row = await db
+    .prepare(
+      `SELECT id, user_id, group_id, type, category, amount, merchant, date, source
+       FROM transactions WHERE user_id = ? AND id = ?`
+    )
+    .bind(userId, id)
+    .first();
+  if (!row || row.id === undefined) return null;
+  return {
+    id: String(row.id),
+    line_user_id: userId,
+    line_group_id: row.group_id ?? null,
+    type: row.type === 'income' ? 'income' : 'expense',
+    category: String(row.category ?? 'อื่นๆ'),
+    amount: Number(row.amount),
+    merchant: row.merchant ?? null,
+    date: String(row.date)
+  };
 }
 
 /**

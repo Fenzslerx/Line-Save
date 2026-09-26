@@ -20,7 +20,7 @@ function makeMockD1(selectRows: any[] = [], firstByParamPrefix?: Record<string, 
         const rows = prefixMatch && prefixMap ? prefixMap[prefixMatch] : selectRows;
         return {
           run: jest.fn().mockResolvedValue({ success: true }),
-          all: jest.fn().mockResolvedValue({ results: selectRows, success: true }),
+          all: jest.fn().mockResolvedValue({ results: rows, success: true }),
           first: jest.fn().mockResolvedValue(rows[0] ?? null)
         };
       }),
@@ -39,7 +39,8 @@ jest.mock('../src/db/client', () => ({
 // The user-taught category rules come from the LIFF module — mocked so the
 // auto-save flow is deterministic; specific tests override the return value.
 jest.mock('../src/db/liff', () => ({
-  findCategoryRule: jest.fn().mockResolvedValue(null)
+  findCategoryRule: jest.fn().mockResolvedValue(null),
+  updateTransaction: jest.fn().mockResolvedValue(true)
 }));
 
 // Wait for the background event processing (fired after the 200 response) to reach a mock
@@ -170,11 +171,12 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
     expect(flexJson).toContain('GrabFood');
     // Header shows expense sign and amount
     expect(flexJson).toContain('−฿500');
-    // Exactly one button and it opens LIFF — no postback pickers anymore
+    // Exactly one LIFF button plus the type-toggle postback button
     const buttons = JSON.stringify(flex).match(/"type":"uri"/g) || [];
     expect(buttons).toHaveLength(1);
     expect(flexJson).toContain('https://liff.line.me/TEST_LIFF_ID');
-    expect(flexJson).not.toContain('postback');
+    // The type-toggle postback lets the user flip income <-> expense
+    expect(flexJson).toContain('act=toggle_type&tx=');
   });
 
   it('should prefer a user-taught category rule over the LLM guess', async () => {
@@ -246,7 +248,7 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
     expect((replyLineMessage as jest.Mock).mock.calls.length).toBe(repliesBefore);
   });
 
-  it('should ignore postback events (auto-save flow sends no interactive cards)', async () => {
+  it('should ignore unrecognized postback events', async () => {
     const postbackPayload = {
       destination: 'U1234567890abcdef',
       events: [
@@ -268,6 +270,70 @@ describe('LINE Webhook Endpoint (POST /webhook)', () => {
     expect(res.body).toEqual({ status: 'ok', processed: 1 });
     await new Promise(resolve => setTimeout(resolve, 100));
     expect((replyLineMessage as jest.Mock).mock.calls.length).toBe(repliesBefore);
+  });
+
+  it('should show the duplicate-slip warning card instead of double-saving', async () => {
+    const dupRow = {
+      id: 'TX_DUP_1', type: 'expense', category: 'อาหารและเครื่องดื่ม',
+      amount: 500, merchant: 'GrabFood', date: '2026-09-23', source: 'line-bot'
+    };
+    (getD1 as jest.Mock)
+      .mockReturnValueOnce(makeMockD1([])) // request log handle
+      .mockReturnValueOnce(makeMockD1([])) // auto-record user
+      .mockReturnValueOnce(makeMockD1([], { U_TEST: [dupRow] })); // msg/img lookups miss, content dedup hits
+
+    const repliesBefore = (replyLineMessage as jest.Mock).mock.calls.length;
+    const res = await postWebhook(makeImageEvent('326000', 'bf377ba0337f43769f6e07dd95ab0f7f', {
+      type: 'user', userId: 'U_TEST_USER_001'
+    }));
+
+    expect(res.status).toBe(200);
+    await waitForMockCalls(replyLineMessage as jest.Mock, repliesBefore + 1);
+
+    const flex = (replyLineMessage as jest.Mock).mock.calls[repliesBefore][1][0];
+    const flexJson = JSON.stringify(flex);
+    expect(flexJson).toContain('บันทึกไว้แล้ว');
+    expect(flexJson).toContain('act=dup_save&msg=326000');
+    expect(flexJson).toContain('act=dup_skip&msg=326000');
+    // Must NOT have auto-saved the slip again
+    expect(flexJson).not.toContain('บันทึกรายจ่ายแล้ว');
+  });
+
+  it('should flip a transaction to income via the toggle_type postback', async () => {
+    const txRow = {
+      id: 'TX_TOGGLE_1', user_id: 'U_TEST_USER_001', group_id: null, type: 'expense',
+      category: 'อาหารและเครื่องดื่ม', amount: 500, merchant: 'GrabFood', date: '2026-09-23'
+    };
+    (getD1 as jest.Mock)
+      .mockReturnValueOnce(makeMockD1([])) // request log handle
+      .mockReturnValueOnce(makeMockD1([])) // auto-record user
+      .mockReturnValueOnce(makeMockD1([], { U_TEST: [txRow] })); // getTransactionById finds it
+
+    const repliesBefore = (replyLineMessage as jest.Mock).mock.calls.length;
+    const res = await postWebhook({
+      destination: 'U1234567890abcdef',
+      events: [
+        {
+          type: 'postback',
+          postback: { data: 'act=toggle_type&tx=TX_TOGGLE_1' },
+          timestamp: 1625097611000,
+          source: { type: 'user', userId: 'U_TEST_USER_001' },
+          replyToken: 'cf377ba0337f43769f6e07dd95ab0f7a',
+          mode: 'active'
+        }
+      ]
+    });
+
+    expect(res.status).toBe(200);
+    await waitForMockCalls(replyLineMessage as jest.Mock, repliesBefore + 1);
+
+    const { updateTransaction } = jest.requireMock('../src/db/liff');
+    expect(updateTransaction).toHaveBeenCalledWith(
+      expect.anything(), 'U_TEST_USER_001', 'TX_TOGGLE_1',
+      expect.objectContaining({ type: 'income', category: 'รายรับทั่วไป' })
+    );
+    const reply = (replyLineMessage as jest.Mock).mock.calls[repliesBefore][1][0];
+    expect(reply.text).toContain('รายรับ');
   });
 
   it('should return 200 for health check', async () => {

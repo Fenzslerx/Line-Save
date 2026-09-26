@@ -80,10 +80,12 @@ export type SlipStage =
   | 'downloading'
   | 'extracting'
   | 'extracted'
+  | 'awaiting_confirm'
   | 'saving'
   | 'saved'
   | 'replied'
-  | 'not_slip';
+  | 'not_slip'
+  | 'skipped';
 
 /**
  * Slip pipeline checkpoint — upsert into pending_slips. A row stuck in
